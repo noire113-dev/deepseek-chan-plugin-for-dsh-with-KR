@@ -206,7 +206,7 @@ test('stored disabled values do not flash features while configuration is loadin
   } finally { h.dom.window.close() }
 })
 
-test('plugin Configure page exposes three independently checked switches', () => {
+test('plugin settings page exposes three independently checked switches', () => {
   const h = clientHarness({ character: true, theme: false, translation: false })
   try {
     const ctx = h.ctx(); h.client.apply(ctx)
