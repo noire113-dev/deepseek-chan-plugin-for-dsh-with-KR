@@ -11,7 +11,7 @@ const { spawnSync } = process.getBuiltinModule("node:child_process");
 const HERE = path.dirname(path.resolve(process.argv[1] || "plugins/dsh-tts/test/dsc-hooks.test.js"));
 const DSC_JS = path.resolve(
   HERE,
-  "../../../harness/overlay/dsh/node_modules/@deepseek-ai/dsh-web-frontend/dist/assets/dsc/dsc.js",
+  "../../../assets/dsc.js",
 );
 const SRC = fs.readFileSync(DSC_JS, "utf8");
 

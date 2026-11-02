@@ -1,11 +1,11 @@
-import { cp, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const root = dirname(here)
 const packageName = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).name
-const original = join(root, 'harness/overlay/dsh/node_modules/@deepseek-ai/dsh-web-frontend/dist/assets/dsc')
+const original = join(root, 'assets')
 let character = await readFile(join(original, 'dsc.js'), 'utf8')
 const replace = (from, to) => {
   if (!character.includes(from)) throw new Error('Original character changed; adapter requires review: ' + from.slice(0, 100))
@@ -28,7 +28,5 @@ const adapter = await readFile(join(here, 'client.js'), 'utf8')
 const result = `window.__ModuleLoader__.load({ id: ${JSON.stringify(packageName)}, factory: (require) => {\nconst module = { exports: {} }; const exports = module.exports;\nconst KOREAN_DICTIONARIES = ${JSON.stringify(dictionaries)};\n${adapter.replace('/* ORIGINAL_CHARACTER */', character)}\nreturn module.exports;\n} });\n`
 await writeFile(join(root, 'cordis.patch.yml'), `- insert:\n    - id: deepseek-harness-kr\n      name: ${JSON.stringify(packageName)}\n`)
 await mkdir(join(root, 'lib'), { recursive: true })
-await cp(original, join(root, 'assets'), { recursive: true })
-// dsc.js is embedded in the loader bundle; the static script is not needed in the package.
 await writeFile(join(root, 'lib/client.js'), result)
 console.error(`Built independent DSH bundle: ${Object.keys(dictionaries).length} Korean namespaces; original character/assets preserved.`)

@@ -16,7 +16,8 @@ https://github.com/user-attachments/assets/7e7a96cc-efc8-416d-89a0-f574fdcda690
 | 폴더 | 내용 |
 |---|---|
 | `plugin/` · `package.json` | DSH 플러그인: 한국어 UI, 파스텔 테마, Live2D 캐릭터 |
-| `harness/overlay/` | 원본 Harness(app.asar)에서 바뀌거나 추가된 파일 314개 (한국어 문구, 파스텔 테마, 인앱 캐릭터, 업데이트 끔 등) |
+| `assets/` | 플러그인과 ASAR 패치가 함께 사용하는 캐릭터 코드·Live2D 모델·테마·배경 |
+| `harness/overlay/` | 원본 Harness(app.asar)에 적용하는 한국어화·데스크톱 패치 파일 |
 | `harness/tools/` | 원본에 overlay를 덮어쓰는 스크립트, 포터블 빌드 스크립트, 분석 도구 |
 | `infographic/` | 소개 영상 최종본과 제작 파일 |
 
@@ -70,11 +71,13 @@ npm run build
 npm test
 ```
 
-빌드는 overlay의 캐릭터·자산과 `plugin/locales.ko.json`을 패키징합니다. 런타임 의존성은 없습니다.
+빌드는 `assets/`의 캐릭터 코드와 `plugin/locales.ko.json`으로 플러그인 클라이언트를 생성합니다. 런타임 의존성은 없습니다.
 빌드된 `lib/client.js`와 `assets/`를 저장소에 포함하므로 Git 주소로 설치할 때 빌드 스크립트를 실행하지 않습니다.
 캐릭터 코드·번역·자산을 수정한 뒤에는 `npm run build`를 실행하고 생성물도 함께 커밋하세요.
 
 ## 기존 적용 방법 (ASAR 패치, 이전 방식)
+
+`apply-overlay.cjs`는 `harness/overlay/`의 패치 파일과 공통 `assets/`를 함께 적용합니다.
 
 1. DeepSeek Harness 0.2.1-rc.5를 설치하고 한 번 실행 후 종료
 2. 원본 백업: `%LOCALAPPDATA%\Programs\DeepSeek Harness\resources\app.asar` → `app.asar.orig`

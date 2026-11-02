@@ -42,6 +42,7 @@
     }
   },
   "devDependencies": {
+    "@electron/asar": "^3.2.17",
     "acorn": "^8.15.0",
     "jsdom": "^27.0.0"
   },
