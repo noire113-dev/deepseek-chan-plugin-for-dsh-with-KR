@@ -1,0 +1,51 @@
+{
+  "name": "deepseek-harness-kr",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness 한국어 UI, 파스텔 테마 및 DeepSeek짱 Live2D 캐릭터",
+  "type": "module",
+  "license": "MIT",
+  "main": "./plugin/host.js",
+  "exports": {
+    ".": "./plugin/host.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "plugin/host.js",
+    "lib/client.js",
+    "assets/",
+    "cordis.patch.yml",
+    "NOTICE.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node plugin/build.mjs",
+    "test": "node --test plugin/test/*.test.js",
+    "locales:extract": "node plugin/extract-locales.mjs"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "dsh": {
+    "engines": {
+      "dsh": ">=0.2.1-rc.5 <0.3.0"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-theme"
+      ]
+    }
+  },
+  "devDependencies": {
+    "acorn": "^8.15.0",
+    "jsdom": "^27.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

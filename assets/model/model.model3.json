@@ -1,0 +1,13 @@
+{
+  "Version": 3,
+  "FileReferences": {
+    "Moc": "model.moc3",
+    "Textures": ["tex_00.png", "tex_01.png", "tex_02.png", "tex_03.png", "tex_04.png"],
+    "Physics": "physics.json",
+    "Motions": { "Idle": [{ "File": "idle.motion3.json", "FadeInTime": 0.5, "FadeOutTime": 0.5 }] }
+  },
+  "Groups": [
+    { "Target": "Parameter", "Name": "EyeBlink", "Ids": ["ParamEyeROpen", "ParamEyeLOpen"] },
+    { "Target": "Parameter", "Name": "LipSync", "Ids": [] }
+  ]
+}

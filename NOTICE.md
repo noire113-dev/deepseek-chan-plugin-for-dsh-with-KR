@@ -17,3 +17,8 @@ MIT License.
 
 ## 배경 그림
 `.../assets/dsc/wallpaper.png` — 저장소 작성자가 AI로 생성한 그림입니다.
+
+## 독립 플러그인 패키지
+`plugin/locales.ko.json`은 위 DeepSeek Harness 수정본에서 추출한 UI 번역입니다.
+플러그인 빌드는 기존 `harness/overlay/.../assets/dsc/` 자산을 배포 패키지의 `assets/`로 복사합니다.
+경로 변경은 모델, Live2D Cubism Core, PixiJS 등 기존 구성 요소의 라이선스를 변경하지 않습니다.

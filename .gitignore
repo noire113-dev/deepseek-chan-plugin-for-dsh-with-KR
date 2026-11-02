@@ -11,3 +11,7 @@ harness/tools/node_modules/
 
 # 실행기 빌드 결과물
 harness/tools/launcher/*.exe
+
+# Development dependencies and package archives
+/node_modules/
+/*.tgz
