@@ -1,0 +1,29 @@
+#dsc-bubble { --dsc-blue-soft: #8fa6ff; }
+
+/* 캐릭터와 말풍선 */
+#dsc-stage { position: fixed; z-index: 30; pointer-events: none; display: none; }
+#dsc-bubble {
+  position: fixed; z-index: 31; pointer-events: none; display: none;
+  max-width: 230px; padding: 9px 14px; border-radius: 16px;
+  background: #fffffff7; color: #26315e; border: 2px solid var(--dsc-blue-soft);
+  font: 600 13px/1.45 "Malgun Gothic", sans-serif; word-break: keep-all; text-align: center;
+  box-shadow: 0 6px 18px #5f7cf533;
+  opacity: 0; transform: translateY(6px) scale(.96); transition: opacity .2s, transform .2s;
+}
+#dsc-bubble.show { opacity: 1; transform: none; }
+#dsc-bubble::after {
+  content: ""; position: absolute; right: 46px; bottom: -8px; width: 12px; height: 12px;
+  background: inherit; border-right: 2px solid var(--dsc-blue-soft); border-bottom: 2px solid var(--dsc-blue-soft);
+  transform: rotate(45deg);
+}
+#dsc-bubble.side::after { right: -8px; bottom: auto; top: 14px; border: 0; border-right: 2px solid var(--dsc-blue-soft); border-top: 2px solid var(--dsc-blue-soft); }
+
+/* 캐릭터 위에서는 손가락 커서 */
+html.dsc-hover, html.dsc-hover * { cursor: pointer !important; }
+
+/* 추론 혼잣말 말풍선: 점선, 연한 글씨 */
+#dsc-bubble.mutter {
+  background: #f7f8fff2; color: #5a6390; font-weight: 500; font-style: italic;
+  border: 2px dashed #b9c6ff;
+}
+#dsc-bubble.mutter::after { border-color: #b9c6ff; border-style: dashed; }

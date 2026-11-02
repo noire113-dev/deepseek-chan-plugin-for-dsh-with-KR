@@ -1,3 +1,7 @@
+import { createRequire } from 'node:module'
+import { renderToStaticMarkup } from 'react-dom/server'
+import React from 'react'
+const require = createRequire(import.meta.url)
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile, mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
@@ -11,25 +15,42 @@ import { apply as hostApply, createAssetHandler, ASSET_PATH } from '../host.js'
 const packageName = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8')).name
 const bundle = await readFile(new URL('../../lib/client.js', import.meta.url), 'utf8')
 
-function clientHarness() {
+function clientHarness(initial = {}, status = 'ready') {
   const dom = new JSDOM('<!doctype html><html><head></head><body data-ds-dark-theme></body></html>', { url: 'http://127.0.0.1/', runScripts: 'outside-only', pretendToBeVisual: true })
-  let client, resolveModel, appDestroyed = 0
+  let client, resolveModel, appDestroyed = 0, appCreated = 0
   const pending = new Promise((resolve) => { resolveModel = resolve })
   dom.window.Live2DCubismCore = {}
   dom.window.PIXI = {
-    Application: class { destroy() { appDestroyed++ } },
+    Application: class { constructor() { appCreated++ } destroy() { appDestroyed++ } },
     live2d: { Live2DModel: { from: () => pending } },
   }
-  dom.window.__ModuleLoader__ = { load({ id, factory }) { assert.equal(id, packageName, 'browser module ID must match its package name'); client = factory() } }
+  dom.window.__ModuleLoader__ = { load({ id, factory }) { assert.equal(id, packageName, 'browser module ID must match its package name'); client = factory(require) } }
   dom.window.eval(bundle)
   const languages = new Map([['en', {}], ['zh', {}]])
   const dictionaries = new Map()
   let selected = 'en'
+  const subscriptions = new Set(), pages = new Map()
+  let snapshot = { status, value: initial, writable: true, revision: 0 }
+  const form = {
+    getSnapshot: () => snapshot,
+    subscribe(fn) { subscriptions.add(fn); return () => subscriptions.delete(fn) },
+    update(value, status = 'ready') { snapshot = { ...snapshot, status, value, revision: snapshot.revision + 1 }; for (const fn of [...subscriptions]) fn() },
+    async set(field, value) { form.update({ ...snapshot.value, [field]: value }); return true },
+  }
   const ctx = () => {
     const cleanups = []
     return {
       effect(fn) { const cleanup = fn(); cleanups.push(cleanup); return cleanup },
+      configForms: { get(id) { assert.equal(id, 'deepseek-harness-kr'); return form } },
+      slots: {
+        inject(name, fn) { assert.equal(name, 'plugins.row.config'); return fn() },
+        register(definition, component) {
+          pages.set(definition.key, component)
+          return () => { if (pages.get(definition.key) === component) pages.delete(definition.key) }
+        },
+      },
       locale: {
+        subscribe() { return () => {} },
         getLocale: () => ({ active: selected, locales: [...languages.keys()].map((id) => ({ id })) }),
         addLanguage({ id }) { languages.set(id, {}); return () => languages.delete(id) },
         register(ns, id, dictionary) {
@@ -44,7 +65,7 @@ function clientHarness() {
       dispose() { for (const cleanup of cleanups.reverse()) cleanup() },
     }
   }
-  return { dom, client, ctx, languages, dictionaries, resolveModel, get appDestroyed() { return appDestroyed }, get selected() { return selected } }
+  return { dom, client, ctx, languages, dictionaries, resolveModel, form, pages, get appCreated() { return appCreated }, get appDestroyed() { return appDestroyed }, get selected() { return selected } }
 }
 
 test('client registers Korean independently, mounts once, and rolls back on disable during model load', async () => {
@@ -57,7 +78,7 @@ test('client registers Korean independently, mounts once, and rolls back on disa
     assert.equal(h.dictionaries.size, 54)
     assert.equal(h.dictionaries.get('settings.theme/ko')['appearance.title'], '모양')
     assert.equal(h.dom.window.document.querySelectorAll('#dsc-stage').length, 1)
-    assert.equal(h.dom.window.document.querySelectorAll('link').length, 1)
+    assert.equal(h.dom.window.document.querySelectorAll('link').length, 2)
     first.dispose()
     assert.equal(h.dom.window.document.querySelectorAll('#dsc-stage, #dsc-bubble, link').length, 0)
     assert.equal(h.dictionaries.size, 0)
@@ -126,4 +147,77 @@ test('Host asset route serves only its files and unregisters with the plugin', a
     assert(resolve(root).startsWith(resolve(tmpdir()) + '\\') || resolve(root).startsWith(resolve(tmpdir()) + '/'))
     await rm(root, { recursive: true, force: true })
   }
+})
+
+test('all eight combinations mount only the selected features', () => {
+  for (const character of [false, true]) for (const theme of [false, true]) for (const translation of [false, true]) {
+    const h = clientHarness({ character, theme, translation })
+    try {
+      const ctx = h.ctx(); h.client.apply(ctx)
+      const doc = h.dom.window.document
+      assert.equal(!!doc.querySelector('#dsc-stage'), character)
+      assert.equal(!!doc.querySelector('link[href$="character.css"]'), character)
+      assert.equal(!!doc.querySelector('link[href$="theme.css"]'), theme)
+      assert.equal(h.languages.has('ko'), translation)
+      assert.equal(h.dictionaries.size, translation ? 54 : 0)
+      assert.equal(doc.body.hasAttribute('data-ds-dark-theme'), !theme, 'character alone must respect dark mode')
+      assert.equal(h.pages.size, 1, 'settings remain available even when every feature is off')
+      ctx.dispose()
+    } finally { h.dom.window.close() }
+  }
+})
+
+test('live changes preserve unrelated features and dispose character resources independently', async () => {
+  const h = clientHarness()
+  try {
+    const ctx = h.ctx(); h.client.apply(ctx)
+    const doc = h.dom.window.document, canvas = doc.querySelector('#dsc-stage')
+    await h.form.set('theme', false)
+    assert.equal(doc.querySelector('#dsc-stage'), canvas)
+    assert(doc.body.hasAttribute('data-ds-dark-theme'))
+    assert.equal(h.appDestroyed, 0)
+    await h.form.set('translation', false)
+    assert.equal(h.dictionaries.size, 0)
+    assert.equal(doc.querySelector('#dsc-stage'), canvas)
+    await h.form.set('character', false)
+    assert.equal(h.appDestroyed, 1)
+    assert.equal(doc.querySelectorAll('link, #dsc-stage, #dsc-bubble').length, 0)
+    await h.form.set('theme', true)
+    assert(!doc.querySelector('#dsc-stage'))
+    assert(doc.querySelector('link[href$="theme.css"]'))
+    assert.equal(h.appCreated, 1)
+    await h.form.set('character', true)
+    assert(doc.querySelector('#dsc-stage'))
+    assert.equal(h.appCreated, 2)
+    ctx.dispose()
+    assert.equal(h.pages.size, 0)
+  } finally { h.dom.window.close() }
+})
+
+test('stored disabled values do not flash features while configuration is loading', () => {
+  const h = clientHarness(undefined, 'loading')
+  try {
+    const ctx = h.ctx(); h.client.apply(ctx)
+    assert.equal(h.dom.window.document.querySelectorAll('link, #dsc-stage').length, 0)
+    h.form.update({ character: false, theme: false, translation: false })
+    assert.equal(h.appCreated, 0)
+    assert.equal(h.dictionaries.size, 0)
+    ctx.dispose()
+  } finally { h.dom.window.close() }
+})
+
+test('plugin Configure page exposes three independently checked switches', () => {
+  const h = clientHarness({ character: true, theme: false, translation: false })
+  try {
+    const ctx = h.ctx(); h.client.apply(ctx)
+    const Page = h.pages.get(packageName + '#deepseek-harness-kr')
+    assert(Page)
+    const html = renderToStaticMarkup(React.createElement(Page, { view: 'page' }))
+    assert.equal((html.match(/role="switch"/g) || []).length, 3)
+    assert.equal((html.match(/checked=""/g) || []).length, 1)
+    assert.match(html, /Character and speech bubbles/)
+    assert.match(html, /Pastel theme/)
+    assert.match(html, /Korean language pack/)
+    ctx.dispose()
+  } finally { h.dom.window.close() }
 })

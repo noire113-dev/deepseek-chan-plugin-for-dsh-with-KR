@@ -1,3 +1,4 @@
+import z from '@deepseek-ai/schemastery'
 import { createReadStream } from 'node:fs'
 import { realpath, stat } from 'node:fs/promises'
 import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
@@ -6,6 +7,12 @@ import { pipeline } from 'node:stream/promises'
 
 export const name = 'deepseek-harness-kr'
 export const inject = ['webServer']
+
+export const Config = z.object({
+  character: z.boolean().default(true).volatile(),
+  theme: z.boolean().default(true).volatile(),
+  translation: z.boolean().default(true).volatile(),
+})
 export const ASSET_PATH = '/deepseek-harness-kr/assets'
 const assets = fileURLToPath(new URL('../assets/', import.meta.url))
 const types = { '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.png': 'image/png', '.moc3': 'application/octet-stream' }
