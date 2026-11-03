@@ -141,9 +141,9 @@
       const homePose = () => {
         const card = document.querySelector(".dsc-composer");
         const maxK = Math.min(1.25, (innerHeight * 0.45) / visH);
-        let k = maxK;
-        if (card) { const r = card.getBoundingClientRect(); k = Math.min(maxK, Math.max((innerWidth - r.right - 8) / visW, (innerHeight - r.bottom - 10) / visH)); }
-        return { k, x: innerWidth - 4 - (W + visW) / 2 * k + fleeX, y: innerHeight - H * k, card };
+        let k = maxK, r = null;
+        if (card) { r = card.getBoundingClientRect(); k = Math.min(maxK, Math.max((innerWidth - r.right - 8) / visW, (innerHeight - r.bottom - 10) / visH)); }
+        return { k, x: innerWidth - 4 - (W + visW) / 2 * k + fleeX, y: innerHeight - H * k, card, r };
       };
       const centerPose = () => {
         // 가운데 아래에 붙여 상반신이 화면 아래에서 올라온 모습 (잘린 선이 화면 중간에 뜨지 않게)
@@ -151,6 +151,7 @@
         return { k, x: innerWidth / 2 - W * k / 2, y: innerHeight - H * k };
       };
       intro.kc = centerPose().k; setRes(intro.kc);
+      let lastPlaceKey = "";
       const place = () => {
         const now = performance.now();
         const home = homePose();
@@ -175,6 +176,12 @@
         canvas.style.display = bubble.style.display = show ? "block" : "none";
         if (!show) return;
         curK = k;
+        // 배치에 쓰는 값이 그대로면 건너뜀: 매 프레임 side 클래스를 뗐다 붙이며 레이아웃을 3번씩 강제하던 것 방지
+        const r0 = home.r;
+        const placeKey = introOn ? "" : [k, x, y, innerWidth, innerHeight, fleeX, r0 && r0.left, r0 && r0.right, r0 && r0.top, r0 && r0.bottom,
+          bubble.textContent, bubble.className.replace(/\bside\b/g, "").trim()].join("|");
+        if (placeKey && placeKey === lastPlaceKey) return;
+        lastPlaceKey = placeKey;
         canvas.style.width = W * k + "px"; canvas.style.height = H * k + "px";
         if (fleeX > 0) bubble.style.display = "none";
         canvas.style.left = x + "px"; canvas.style.top = y + "px";
@@ -191,7 +198,7 @@
         bubble.style.maxWidth = Math.max(150, visW * k * 1.1) + "px";
         bubble.style.top = Math.max(8, headTop - bubble.offsetHeight - 10) + "px";
         if (card) {
-          const r = card.getBoundingClientRect(), b = bubble.getBoundingClientRect();
+          const r = home.r, bl = bubble.offsetLeft, bt = bubble.offsetTop, b = { left: bl, top: bt, right: bl + bubble.offsetWidth, bottom: bt + bubble.offsetHeight };   // 등장 애니메이션(transform) 영향 없는 레이아웃 크기
           if (b.left < r.right && b.right > r.left && b.top < r.bottom && b.bottom > r.top) {
             bubble.classList.add("side");
             bubble.style.maxWidth = "220px";
