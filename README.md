@@ -54,9 +54,11 @@ overlay는 Windows판과 macOS판에 공통으로 쓰입니다. 두 원본 asar�
    sh apply-macos.sh                       # 기본 경로: /Applications/DeepSeek Harness.app
    sh apply-macos.sh "/경로/DeepSeek Harness.app"
    ```
-   원본 백업(`app.asar.orig`, `Info.plist.orig`, 처음 한 번만) → overlay 적용 → `Info.plist`의 `ElectronAsarIntegrity` 해시 갱신 → 자동 업데이트 끔 → ad-hoc 재서명 순서로 진행합니다. 다시 실행해도 항상 원본에서 새로 만듭니다.
+   원본 백업(`app.asar.orig`, `app-update.yml.orig`, `Info.plist.orig`, 처음 한 번만) → overlay 적용 → `Info.plist`의 `ElectronAsarIntegrity` 해시 갱신 → 자동 업데이트 끔 → ad-hoc 재서명 → quarantine 속성 제거 순서로 진행합니다. 다시 실행해도 항상 원본에서 새로 만듭니다.
 
-되돌리기: `Contents/Resources/app.asar.orig` → `app.asar`, `Contents/Info.plist.orig` → `Info.plist`로 되돌린 뒤 `codesign --force --deep -s - "/Applications/DeepSeek Harness.app"`를 실행합니다.
+패치한 앱은 DeepSeek 공식 서명 대신 로컬 ad-hoc 서명을 쓰므로 Gatekeeper의 공증 확인을 거치지 않습니다.
+
+되돌리기: `Contents/Resources/app.asar.orig` → `app.asar`, `Contents/Resources/app-update.yml.orig` → `app-update.yml`, `Contents/Info.plist.orig` → `Info.plist`로 되돌린 뒤 `codesign --force --deep -s - "/Applications/DeepSeek Harness.app"`를 실행합니다.
 
 ## 포터블(설치 없이 실행)
 
