@@ -221,3 +221,7 @@ test('plugin settings page exposes three independently checked switches', () => 
     ctx.dispose()
   } finally { h.dom.window.close() }
 })
+
+test('core worker is registered for termination when the plugin unloads', () => {
+  assert.match(bundle, /new Worker\(BASE \+ "dsc-core-worker\.js"\); \} catch \{ return; \}\s*life\.add\(\(\) => \{ try \{ w\.terminate\(\) \} catch \{\} \}\)/)
+})

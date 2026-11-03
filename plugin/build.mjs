@@ -26,6 +26,8 @@ character = character.replace(/life\.own\(document\.createElement\(("[a-z]+")\)/
 replace('app.stage.addChild(model);', 'if (life.stopped) { model.destroy(); return; }\n      app.stage.addChild(model);')
 replace('const model = await', 'life.add(() => app.destroy(true, { children: true }));\n      const model = await')
 replace('if (!window.PIXI.live2d) await load("vendor/cubism4.patched.js");', 'if (!window.PIXI.live2d) await load("vendor/cubism4.patched.js");\n      if (life.stopped) return;')
+// The Core worker is not tied to the PIXI app, so terminate it explicitly when the plugin unloads.
+replace('try { w = new Worker(BASE + "dsc-core-worker.js"); } catch { return; }', 'try { w = new Worker(BASE + "dsc-core-worker.js"); } catch { return; }\n        life.add(() => { try { w.terminate() } catch {} })')
 replace('window.__dsc = {', 'if (life.stopped) return;\n      window.__dsc = {')
 // Stop async initialization even if a fetch finishes after disable.
 replace('const weight = {}, hold = {}, until = {};', 'if (life.stopped) return;\n      const weight = {}, hold = {}, until = {};')
