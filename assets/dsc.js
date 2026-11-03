@@ -203,13 +203,13 @@
         let introOn = intro.phase !== "done", vo = 0;
         if (introOn && !intro.begun) {   // 호스트 화면(입력 카드)이 뜨고 잠잠해진 뒤에 등장: 창이 막 떠서 메인 스레드가 바쁜 구간의 끊김을 안 보이게 (최대 8초 대기)
           if (home.card && !intro.cardAt) intro.cardAt = now;
-          if (!(intro.cardAt && now - intro.cardAt > 300) && now - intro.start < 8000) return;
+          if (!(intro.cardAt && now - intro.cardAt > 300) && now - intro.start < 8000) { veil.style.opacity = 1; veil.style.pointerEvents = "none"; return; }   // 대기 중에는 아바타 없이 흐린 배경만
           intro.begun = true; intro.start = now;
         }
         if (introOn) {
           const c = centerPose();
           if (intro.phase === "center") {
-            vo = ease((now - intro.start) / 300);
+            vo = 1;   // 대기 중에 이미 떠 있음
             k = c.k; x = c.x; y = c.y;
             const ready = !!home.card || now - intro.start > 15000;
             if (intro.skip || (now - intro.start > 6800 && ready)) { intro.phase = "move"; intro.moveStart = now; intro.from = c; }
@@ -220,6 +220,7 @@
             if (p >= 1) { intro.phase = "done"; introOn = false; setRes(1); veil.remove(); bubble.style.left = ""; bubble.style.fontSize = ""; bubble.style.padding = ""; }
           }
           veil.style.opacity = vo; veil.style.pointerEvents = intro.phase === "center" ? "auto" : "none";
+          canvas.style.opacity = intro.phase === "center" ? ease((now - intro.start) / 300) : "";   // 아바타는 흐린 배경 위에서 서서히 등장
         }
         const show = introOn || k >= 0.42;
         canvas.style.display = bubble.style.display = show ? "block" : "none";
