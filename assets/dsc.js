@@ -151,6 +151,7 @@
         return { k, x: innerWidth / 2 - W * k / 2, y: innerHeight - H * k };
       };
       intro.kc = centerPose().k; setRes(intro.kc);
+      let lastClip = "";
       const place = () => {
         const now = performance.now();
         const home = homePose();
@@ -172,13 +173,28 @@
           veil.style.opacity = vo; veil.style.pointerEvents = intro.phase === "center" ? "auto" : "none";
         }
         const show = introOn || k >= 0.42;
-        canvas.style.zIndex = introOn ? "30" : "6";   // 인트로 뒤에는 입력 영역(승인·질문 카드, z=7) 아래로: 카드가 아바타에 가려지지 않게
         canvas.style.display = bubble.style.display = show ? "block" : "none";
         if (!show) return;
         curK = k;
         canvas.style.width = W * k + "px"; canvas.style.height = H * k + "px";
         if (fleeX > 0) bubble.style.display = "none";
         canvas.style.left = x + "px"; canvas.style.top = y + "px";
+        // 승인·질문 카드가 입력 영역에 떠 있으면 캐릭터에서 카드 모양(둥근 모서리 포함)만 잘라 낸다.
+        // 캐릭터는 계속 위(z=30)에 두므로 테마를 끈 상태의 불투명한 입력 영역 배경에도 몸이 가려지지 않는다.
+        const seat = !introOn && home.card && home.card.closest('[class*="composerSeat"]');
+        const popup = seat && seat.querySelector('[class*="_card"]:not(.dsc-composer)');
+        let clip = "";
+        if (popup) {
+          const pr = popup.getBoundingClientRect(), cs = getComputedStyle(popup), cw = W * k, ch = H * k;
+          const l = pr.left - x, t = pr.top - y, rr = pr.right - x, bb = pr.bottom - y;
+          if (rr > 0 && bb > 0 && l < cw && t < ch) {
+            const rad = (v) => Math.min(parseFloat(v) || 0, pr.width / 2, pr.height / 2), f = (n) => +n.toFixed(2);
+            const tl = rad(cs.borderTopLeftRadius), tr = rad(cs.borderTopRightRadius), br = rad(cs.borderBottomRightRadius), bl = rad(cs.borderBottomLeftRadius);
+            clip = `path(evenodd, "M0 0H${f(cw)}V${f(ch)}H0Z M${f(l + tl)} ${f(t)}H${f(rr - tr)}A${f(tr)} ${f(tr)} 0 0 1 ${f(rr)} ${f(t + tr)}V${f(bb - br)}` +
+              `A${f(br)} ${f(br)} 0 0 1 ${f(rr - br)} ${f(bb)}H${f(l + bl)}A${f(bl)} ${f(bl)} 0 0 1 ${f(l)} ${f(bb - bl)}V${f(t + tl)}A${f(tl)} ${f(tl)} 0 0 1 ${f(l + tl)} ${f(t)}Z")`;
+          }
+        }
+        if (clip !== lastClip) { canvas.style.clipPath = clip; lastClip = clip; }
         const headTop = y + H * 0.05 * k;
         bubble.classList.remove("side");
         if (introOn) {   // 가운데에선 머리 위에 큰 말풍선
