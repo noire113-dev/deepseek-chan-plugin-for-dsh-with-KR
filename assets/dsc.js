@@ -201,6 +201,11 @@
         const home = homePose();
         let { k, x, y } = home;
         let introOn = intro.phase !== "done", vo = 0;
+        if (introOn && !intro.begun) {   // 호스트 화면(입력 카드)이 뜨고 잠잠해진 뒤에 등장: 창이 막 떠서 메인 스레드가 바쁜 구간의 끊김을 안 보이게 (최대 8초 대기)
+          if (home.card && !intro.cardAt) intro.cardAt = now;
+          if (!(intro.cardAt && now - intro.cardAt > 300) && now - intro.start < 8000) return;
+          intro.begun = true; intro.start = now;
+        }
         if (introOn) {
           const c = centerPose();
           if (intro.phase === "center") {
