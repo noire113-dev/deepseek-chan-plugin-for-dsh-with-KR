@@ -172,6 +172,7 @@
           veil.style.opacity = vo; veil.style.pointerEvents = intro.phase === "center" ? "auto" : "none";
         }
         const show = introOn || k >= 0.42;
+        canvas.style.zIndex = introOn ? "30" : "6";   // 인트로 뒤에는 입력 영역(승인·질문 카드, z=7) 아래로: 카드가 아바타에 가려지지 않게
         canvas.style.display = bubble.style.display = show ? "block" : "none";
         if (!show) return;
         curK = k;
@@ -589,10 +590,13 @@
         return ry < 0.4 ? "chest" : "body";
       };
       // 화면 좌표 → 캔버스 좌표, 캐릭터 위면 [x, y, 메시 번호]
+      // 버튼·입력 요소와 입력 영역의 카드(승인·질문 팝업)는 아바타와 겹쳐도 클릭이 그대로 통하게
+      const UI_HIT = 'button, a[href], input, textarea, select, summary, [contenteditable="true"], [class*="composerSeat"] [class*="_card"]';
       const hitAt = (cx, cy) => {
         if (canvas.style.display === "none" || fleeX > 0) return null;
         const r = canvas.getBoundingClientRect();
         if (cx < r.left || cx > r.right || cy < r.top || cy > r.bottom) return null;
+        if (document.elementFromPoint(cx, cy)?.closest(UI_HIT)) return null;
         const x = (cx - r.left) / curK, y = (cy - r.top) / curK;
         const d = pickDrawable(x, y);
         return d >= 0 ? [x, y, d] : null;
