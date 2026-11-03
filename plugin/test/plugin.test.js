@@ -160,7 +160,7 @@ test('all eight combinations mount only the selected features', () => {
       assert.equal(!!doc.querySelector('link[href$="theme.css"]'), theme)
       assert.equal(h.languages.has('ko'), translation)
       assert.equal(h.dictionaries.size, translation ? 54 : 0)
-      assert.equal(doc.body.hasAttribute('data-ds-dark-theme'), !theme, 'character alone must respect dark mode')
+      assert.equal(doc.body.hasAttribute('data-ds-dark-theme'), true, 'theme and character keep the app dark mode')
       assert.equal(h.pages.size, 1, 'settings remain available even when every feature is off')
       ctx.dispose()
     } finally { h.dom.window.close() }

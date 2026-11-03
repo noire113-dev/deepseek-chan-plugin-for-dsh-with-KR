@@ -33,10 +33,6 @@
   const ready = (fn) => (document.body ? fn() : addEventListener("DOMContentLoaded", fn, { once: true }));
   ready(() => {
     // ---------- 밝은 모드 고정 + 테마용 표시 ----------
-    const keepLight = () => { if (document.body.hasAttribute("data-ds-dark-theme")) document.body.removeAttribute("data-ds-dark-theme"); };
-    keepLight();
-    new MutationObserver(keepLight).observe(document.body, { attributes: true, attributeFilter: ["data-ds-dark-theme"] });
-
     let tagQueued = false;
     const tag = () => {
       tagQueued = false;
@@ -136,7 +132,7 @@
       const DPR = (devicePixelRatio || 1) * 1.5;   // 1.5배로 그려 줄여 보여 줌 (윤곽선 매끄럽게)
       const intro = { phase: "center", start: performance.now(), moveStart: 0, from: null, kc: 1 };
       const veil = document.createElement("div");
-      veil.style.cssText = "position:fixed;inset:0;z-index:29;background:radial-gradient(circle at 50% 55%,#ffffffd9,#eef0ffcc 70%);backdrop-filter:blur(8px);opacity:0;transition:none;cursor:pointer";
+      veil.style.cssText = "position:fixed;inset:0;z-index:29;background:radial-gradient(circle at 50% 55%,var(--dsc-veil1,#ffffffd9),var(--dsc-veil2,#eef0ffcc) 70%);backdrop-filter:blur(8px);opacity:0;transition:none;cursor:pointer";
       document.body.append(veil);
       veil.addEventListener("pointerdown", () => { if (intro.phase === "center") intro.skip = true; });
       const setRes = (k) => { app.renderer.resolution = DPR * Math.max(1, k); app.renderer.resize(W, H); };

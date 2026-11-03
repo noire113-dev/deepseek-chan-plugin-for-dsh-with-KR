@@ -92,9 +92,6 @@ function mountLayout(life) {
 
 function mountTheme(ctx, life) {
   stylesheet(life, 'theme.css')
-  const keepLight = () => document.body.removeAttribute('data-ds-dark-theme')
-  keepLight()
-  life.observe(keepLight).observe(document.body, { attributes: true, attributeFilter: ['data-ds-dark-theme'] })
   life.add(() => {
     if (ctx.theme.getTheme().active.colorScheme === 'dark') document.body.setAttribute('data-ds-dark-theme', '')
     else document.body.removeAttribute('data-ds-dark-theme')

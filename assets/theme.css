@@ -3,6 +3,8 @@ html body {
   --dsc-blue: #5f7cf5;
   --dsc-blue-soft: #8fa6ff;
   --dsc-pink: #ff8fbd;
+  --dsc-veil1: #ffffffd9;
+  --dsc-veil2: #eef0ffcc;
   --dsw-alias-bg-base: #ffffff00 !important;
   --dsh-boot-bg: #f3f6ff !important;
   --dsw-specific-sidebar-fill: #ffffff00 !important;
@@ -72,3 +74,47 @@ html body .dsc-newsession {
   color: #fff !important;
   box-shadow: 0 6px 18px #6f8cff44 !important;
 }
+
+/* 다크 모드. 앱이 body[data-ds-dark-theme]를 붙이면 라이트 파스텔 위를 덮는다. */
+html body[data-ds-dark-theme] {
+  --dsc-veil1: #0e1014d9;
+  --dsc-veil2: #1a1e2acc;
+  --dsw-alias-bg-base: #15151700 !important;
+  --dsh-boot-bg: #151517 !important;
+  --dsw-specific-sidebar-fill: #1b1c2000 !important;
+  --dsw-alias-bg-layer-1: #232529e0 !important;
+  --dsw-alias-bg-layer-2: #26282df0 !important;
+  --dsw-alias-bg-layer-3: #2b2d33fa !important;
+  --dsw-alias-settings-card-fill: #26282df0 !important;
+  --dsw-alias-button-floating-fill: #2b2d33f0 !important;
+  --dsw-alias-interactive-bg-hover: #8fa6ff24 !important;
+  --dsw-alias-interactive-bg-active: #8fa6ff3d !important;
+  --dsw-alias-interactive-bg-hover-solid: #2f323a !important;
+  --dsw-specific-sidebar-nav-item-active-accent: #33363f !important;
+  --dsw-alias-border-l1: #8fa6ff1f !important;
+  --dsw-alias-border-l2: #8fa6ff33 !important;
+  --dsw-alias-border-l3: #8fa6ff4d !important;
+  --dsw-alias-label-primary: #e8ebf5 !important;
+  --dsw-alias-label-primary-bluish: #e8ebf5 !important;
+}
+html:has(body[data-ds-dark-theme]) {
+  background: linear-gradient(160deg, #0d0f13 0%, #12151d 55%, #17131f 100%) fixed !important;
+}
+html body[data-ds-dark-theme]::before {
+  background:
+    radial-gradient(ellipse at 80% 105%, #5f7cf540, transparent 55%),
+    radial-gradient(ellipse at 15% -5%, #ff8fbd26, transparent 45%);
+}
+html body[data-ds-dark-theme]::after { display: none; }
+html body[data-ds-dark-theme] [class*="_userRow"] [class*="_bubble"] {
+  background: linear-gradient(135deg, #2b3560eb, #43263aeb) !important;
+  border: 1px solid #8fa6ff2e !important;
+}
+html body[data-ds-dark-theme] .dsc-composer {
+  background:
+    linear-gradient(#1e2026e6, #1e2026e6) padding-box,
+    linear-gradient(120deg, #6b7ff0, #d97aa8) border-box !important;
+  box-shadow: 0 8px 28px #00000059, 0 0 0 4px #8fa6ff14 !important;
+}
+html body[data-ds-dark-theme] .dsc-send { box-shadow: 0 4px 14px #ff8fbd40 !important; }
+html body[data-ds-dark-theme] .dsc-newsession { box-shadow: 0 6px 18px #6f8cff33 !important; }

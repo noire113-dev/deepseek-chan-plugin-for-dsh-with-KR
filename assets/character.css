@@ -27,3 +27,27 @@ html.dsc-hover, html.dsc-hover * { cursor: pointer !important; }
   border: 2px dashed #b9c6ff;
 }
 #dsc-bubble.mutter::after { border-color: #b9c6ff; border-style: dashed; }
+
+html body[data-ds-dark-theme] #dsc-bubble {
+  --dsc-bubble-bg: #22242bf2;
+  --dsc-bubble-fg: #e8ebf5;
+  --dsc-bubble-line: #5a6ba8;
+  --dsc-bubble-shadow: #00000066;
+  --dsc-mutter-bg: #1d1f27f2;
+  --dsc-mutter-fg: #a6b0d4;
+  --dsc-mutter-line: #45538a;
+  background: var(--dsc-bubble-bg);
+  color: var(--dsc-bubble-fg);
+  border-color: var(--dsc-bubble-line);
+  box-shadow: 0 6px 18px var(--dsc-bubble-shadow);
+}
+html body[data-ds-dark-theme] #dsc-bubble::after { border-color: var(--dsc-bubble-line); }
+html body[data-ds-dark-theme] #dsc-bubble.side::after {
+  border: 0; border-right: 2px solid var(--dsc-bubble-line); border-top: 2px solid var(--dsc-bubble-line);
+}
+html body[data-ds-dark-theme] #dsc-bubble.mutter {
+  background: var(--dsc-mutter-bg);
+  color: var(--dsc-mutter-fg);
+  border-color: var(--dsc-mutter-line);
+}
+html body[data-ds-dark-theme] #dsc-bubble.mutter::after { border-color: var(--dsc-mutter-line); }
