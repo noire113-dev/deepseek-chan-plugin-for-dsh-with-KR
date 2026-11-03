@@ -196,6 +196,7 @@
       };
       intro.kc = centerPose().k; setRes(intro.kc);
       let lastPlaceKey = "";
+      let lastClip = "";
       const place = () => {
         const now = performance.now();
         const home = homePose();
@@ -226,6 +227,23 @@
         canvas.style.display = bubble.style.display = show ? "block" : "none";
         if (!show) return;
         curK = k;
+        // 승인·질문 카드가 입력 영역에 떠 있으면 캐릭터에서 카드 모양(둥근 모서리 포함)만 잘라 낸다.
+        // 캐릭터는 계속 위(z=30)에 두므로 테마를 끈 상태의 불투명한 입력 영역 배경에도 몸이 가려지지 않는다.
+        // (placeKey 비교보다 먼저: 입력창 위치가 그대로여도 카드가 뜨고 사라지거나 테마 전환으로 반지름이 바뀌면 갱신)
+        const seat = !introOn && home.card && home.card.closest('[class*="composerSeat"]');
+        const popup = seat && seat.querySelector('[class*="_card"]:not(.dsc-composer)');
+        let clip = "";
+        if (popup) {
+          const pr = popup.getBoundingClientRect(), cs = getComputedStyle(popup), cw = W * k, ch = H * k;
+          const l = pr.left - x, t = pr.top - y, rr = pr.right - x, bb = pr.bottom - y;
+          if (rr > 0 && bb > 0 && l < cw && t < ch) {
+            const rad = (v) => Math.min(parseFloat(v) || 0, pr.width / 2, pr.height / 2), f = (n) => +n.toFixed(2);
+            const tl = rad(cs.borderTopLeftRadius), tr = rad(cs.borderTopRightRadius), br = rad(cs.borderBottomRightRadius), bl = rad(cs.borderBottomLeftRadius);
+            clip = `path(evenodd, "M0 0H${f(cw)}V${f(ch)}H0Z M${f(l + tl)} ${f(t)}H${f(rr - tr)}A${f(tr)} ${f(tr)} 0 0 1 ${f(rr)} ${f(t + tr)}V${f(bb - br)}` +
+              `A${f(br)} ${f(br)} 0 0 1 ${f(rr - br)} ${f(bb)}H${f(l + bl)}A${f(bl)} ${f(bl)} 0 0 1 ${f(l)} ${f(bb - bl)}V${f(t + tl)}A${f(tl)} ${f(tl)} 0 0 1 ${f(l + tl)} ${f(t)}Z")`;
+          }
+        }
+        if (clip !== lastClip) { canvas.style.clipPath = clip; lastClip = clip; }
         // 배치에 쓰는 값이 그대로면 건너뜀: 매 프레임 side 클래스를 뗐다 붙이며 레이아웃을 3번씩 강제하던 것 방지
         const r0 = home.r;
         const placeKey = introOn ? "" : [k, x, y, innerWidth, innerHeight, fleeX, r0 && r0.left, r0 && r0.right, r0 && r0.top, r0 && r0.bottom,
@@ -646,10 +664,13 @@
         return ry < 0.4 ? "chest" : "body";
       };
       // 화면 좌표 → 캔버스 좌표, 캐릭터 위면 [x, y, 메시 번호]
+      // 버튼·입력 요소와 입력 영역의 카드(승인·질문 팝업)는 아바타와 겹쳐도 클릭이 그대로 통하게
+      const UI_HIT = 'button, a[href], input, textarea, select, summary, [contenteditable="true"], [class*="composerSeat"] [class*="_card"]';
       const hitAt = (cx, cy) => {
         if (canvas.style.display === "none" || fleeX > 0) return null;
         const r = canvas.getBoundingClientRect();
         if (cx < r.left || cx > r.right || cy < r.top || cy > r.bottom) return null;
+        if (document.elementFromPoint(cx, cy)?.closest(UI_HIT)) return null;
         const x = (cx - r.left) / curK, y = (cy - r.top) / curK;
         const d = pickDrawable(x, y);
         return d >= 0 ? [x, y, d] : null;
