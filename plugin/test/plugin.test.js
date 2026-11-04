@@ -244,57 +244,112 @@ test('update source parsing and version comparison', () => {
   h.dom.window.close()
 })
 
-function fakeManager({ version = '0.1.2', source = 'git+https://github.com/noire113-dev/deepseek-harness-kr.git', install } = {}) {
+function fakeManager({ version = '0.1.2', source = 'git+https://github.com/noire113-dev/deepseek-harness-kr.git', install, remove } = {}) {
   const calls = []
   return {
     calls,
     async listBundles() { return { ok: true, value: [{ name: 'other', version: '9.9.9' }, { name: 'deepseek-harness-kr', version, source }] } },
-    async installBundle(spec, options) { calls.push([spec, options]); return install ? install(spec, options) : { ok: true, value: { application: 'restart-required', restartReason: 'no-hmr', changed: true } } },
+    async installBundle(spec, options) { calls.push(['install', spec, options]); return install ? install(spec, options, calls) : { ok: true, value: { application: 'restart-required', restartReason: 'no-hmr', changed: true } } },
+    async removeBundle(name) { calls.push(['remove', name]); return remove ? remove(name) : { ok: true, value: { application: 'applied', changed: true } } },
+    async waitForInstall() { return { ok: true, value: null } },
   }
 }
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
+const memoryStorage = () => { let v = null; return { read: () => v, write: (x) => { v = x }, clear: () => { v = null }, get value() { return v } } }
+const remoteVersion = (version) => async () => ({ ok: true, status: 200, json: async () => ({ version }) })
 
-test('updater finds a newer version, updates through installBundle with the installed source, and asks for a restart', async () => {
+test('updater asks for confirmation, then updates through installBundle with the installed source', async () => {
   const h = clientHarness(); after(() => h.dom.window.close())
   const { createUpdater } = h.client.internals
   const urls = []
-  const updater = createUpdater({ fetch: async (url) => { urls.push(url); return { ok: true, status: 200, json: async () => ({ version: '0.1.3' }) } } })
+  const updater = createUpdater({ storage: memoryStorage(), fetch: async (url) => { urls.push(url); return { ok: true, status: 200, json: async () => ({ version: '0.1.3' }) } } })
   const manager = fakeManager()
   updater.attach(manager); await settle()
   assert.deepEqual(urls, ['https://raw.githubusercontent.com/noire113-dev/deepseek-harness-kr/HEAD/package.json'])
   assert.equal(updater.getSnapshot().phase, 'available')
   assert.equal(updater.getSnapshot().current, '0.1.2')
   assert.equal(updater.getSnapshot().latest, '0.1.3')
-  await updater.update()
-  assert.equal(manager.calls.length, 1)
-  assert.equal(manager.calls[0][0], 'git+https://github.com/noire113-dev/deepseek-harness-kr.git')
-  assert.equal(manager.calls[0][1].enabled, true)
+  updater.update()
+  assert.equal(updater.getSnapshot().phase, 'confirm')
+  assert.equal(manager.calls.length, 0, 'nothing runs before confirmation')
+  updater.cancel()
+  assert.equal(updater.getSnapshot().phase, 'available')
+  updater.update(); await updater.confirm()
+  assert.deepEqual(manager.calls.map((c) => c[0]), ['install'])
+  assert.equal(manager.calls[0][1], 'git+https://github.com/noire113-dev/deepseek-harness-kr.git')
+  assert.equal(manager.calls[0][2].enabled, true)
   assert.equal(updater.getSnapshot().phase, 'restart')
-  await updater.update()
+  updater.update(); await updater.confirm()
   assert.equal(manager.calls.length, 1, 'no second install after the update finished')
+})
+
+test('updater removes and reinstalls when Harness refuses to reinstall an installed bundle', async () => {
+  const h = clientHarness(); after(() => h.dom.window.close())
+  const { createUpdater } = h.client.internals
+  const storage = memoryStorage(), seen = []
+  const manager = fakeManager({
+    install: async (spec, options, calls) => {
+      seen.push(storage.value)
+      return calls.filter((c) => c[0] === 'install').length === 1
+        ? { ok: true, value: { application: 'failed', error: { code: 'already-installed' } } }
+        : { ok: true, value: { application: 'applied', changed: true } }
+    },
+  })
+  const updater = createUpdater({ storage, fetch: remoteVersion('0.1.3') })
+  updater.attach(manager); await settle()
+  updater.update(); await updater.confirm()
+  assert.deepEqual(manager.calls.map((c) => c[0]), ['install', 'remove', 'install'])
+  assert.equal(manager.calls[1][1], 'deepseek-harness-kr')
+  assert.equal(manager.calls[0][2].requestId, manager.calls[2][2].requestId)
+  assert.equal(seen[1]?.to, '0.1.3', 'pending update is saved before the bundle is removed')
+  assert.equal(storage.value, null)
+  assert.equal(updater.getSnapshot().phase, 'updated')
+  const stopped = createUpdater({ storage: memoryStorage(), fetch: remoteVersion('0.1.3') })
+  const blocked = fakeManager({ install: async () => ({ ok: true, value: { application: 'failed', error: { code: 'already-installed' } } }), remove: async () => ({ ok: true, value: { application: 'failed', error: { code: 'stop-profile' } } }) })
+  stopped.attach(blocked); await settle(); stopped.update(); await stopped.confirm()
+  assert.deepEqual(blocked.calls.map((c) => c[0]), ['install', 'remove'], 'a refused removal does not reinstall')
+  assert.equal(stopped.getSnapshot().phase, 'update-failed')
+  assert.match(stopped.getSnapshot().error, /stop-profile/)
+})
+
+test('a reloaded plugin picks up the result of the update the previous instance started', async () => {
+  const h = clientHarness(); after(() => h.dom.window.close())
+  const { createUpdater } = h.client.internals
+  const storage = memoryStorage()
+  storage.write({ requestId: 'r1', from: '0.1.0', to: '0.1.2', source: 'x', at: Date.now() })
+  const updater = createUpdater({ storage, fetch: remoteVersion('0.1.2') })
+  updater.attach(fakeManager({ version: '0.1.2' })); await settle()
+  assert.equal(updater.getSnapshot().phase, 'updated')
+  assert.equal(updater.getSnapshot().from, '0.1.0')
+  assert.equal(storage.value, null)
+  const stale = memoryStorage()
+  stale.write({ requestId: 'r2', from: '0.1.0', to: '0.1.2', source: 'x', at: Date.now() - 60 * 60 * 1000 })
+  const later = createUpdater({ storage: stale, fetch: remoteVersion('0.1.2') })
+  later.attach(fakeManager({ version: '0.1.0' })); await settle()
+  assert.equal(later.getSnapshot().phase, 'available', 'an old pending record is ignored')
+  assert.equal(stale.value, null)
 })
 
 test('updater reports current, unsupported, pinned, failures and a missing manager without installing', async () => {
   const h = clientHarness(); after(() => h.dom.window.close())
   const { createUpdater } = h.client.internals
-  const latest = (version) => async () => ({ ok: true, status: 200, json: async () => ({ version }) })
-  const run = async (options, manager) => { const u = createUpdater(options); u.attach(manager); await settle(); return u }
-  assert.equal((await run({ fetch: latest('0.1.2') }, fakeManager())).getSnapshot().phase, 'current')
-  assert.equal((await run({ fetch: latest('0.1.1') }, fakeManager())).getSnapshot().phase, 'current', 'older remote is not an update')
-  assert.equal((await run({ fetch: latest('9.0.0') }, fakeManager({ source: 'C:/local/deepseek-harness-kr' }))).getSnapshot().phase, 'unsupported')
-  assert.equal((await run({ fetch: latest('9.0.0') }, fakeManager({ source: 'git+https://github.com/a/b.git#6675ac2616c3' }))).getSnapshot().phase, 'pinned')
+  const run = async (options, manager) => { const u = createUpdater({ storage: memoryStorage(), ...options }); u.attach(manager); await settle(); return u }
+  assert.equal((await run({ fetch: remoteVersion('0.1.2') }, fakeManager())).getSnapshot().phase, 'current')
+  assert.equal((await run({ fetch: remoteVersion('0.1.1') }, fakeManager())).getSnapshot().phase, 'current', 'older remote is not an update')
+  assert.equal((await run({ fetch: remoteVersion('9.0.0') }, fakeManager({ source: 'C:/local/deepseek-harness-kr' }))).getSnapshot().phase, 'unsupported')
+  assert.equal((await run({ fetch: remoteVersion('9.0.0') }, fakeManager({ source: 'git+https://github.com/a/b.git#6675ac2616c3' }))).getSnapshot().phase, 'pinned')
   const offline = await run({ fetch: async () => ({ ok: false, status: 404 }) }, fakeManager())
   assert.equal(offline.getSnapshot().phase, 'check-failed')
   assert.match(offline.getSnapshot().error, /404/)
-  const failing = await run({ fetch: latest('0.1.3') }, fakeManager({ install: async () => ({ ok: true, value: { application: 'failed', error: { code: 'network', diagnostic: 'offline' } } }) }))
-  await failing.update()
+  const failing = await run({ fetch: remoteVersion('0.1.3') }, fakeManager({ install: async () => ({ ok: true, value: { application: 'failed', error: { code: 'network', diagnostic: 'offline' } } }) }))
+  failing.update(); await failing.confirm()
   assert.equal(failing.getSnapshot().phase, 'update-failed')
   assert.match(failing.getSnapshot().error, /network: offline/)
-  const none = createUpdater({ fetch: latest('9.0.0') })
-  await none.check(); await none.update()
+  const none = createUpdater({ storage: memoryStorage(), fetch: remoteVersion('9.0.0') })
+  await none.check(); none.update(); await none.confirm()
   assert.equal(none.getSnapshot().phase, 'unavailable')
-  const detached = await run({ fetch: latest('0.1.3') }, fakeManager())
-  detached.detach(); await detached.update()
+  const detached = await run({ fetch: remoteVersion('0.1.3') }, fakeManager())
+  detached.detach(); detached.update(); await detached.confirm()
   assert.equal(detached.getSnapshot().phase, 'unavailable')
 })
 

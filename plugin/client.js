@@ -151,12 +151,39 @@ function compareVersions(a, b) {
   return x.pre < y.pre ? -1 : 1
 }
 
-function createUpdater({ fetch: fetchImpl = (...args) => window.fetch(...args) } = {}) {
+const PENDING_KEY = 'deepseek-harness-kr:update'
+const browserStorage = {
+  read() { try { return JSON.parse(window.localStorage.getItem(PENDING_KEY) || 'null') } catch { return null } },
+  write(value) { try { window.localStorage.setItem(PENDING_KEY, JSON.stringify(value)) } catch {} },
+  clear() { try { window.localStorage.removeItem(PENDING_KEY) } catch {} },
+}
+
+function createUpdater({ fetch: fetchImpl = (...args) => window.fetch(...args), storage = browserStorage, now = () => Date.now() } = {}) {
   const listeners = new Set()
   let manager = null, generation = 0
   let snapshot = { phase: 'unavailable' }
   const set = (patch) => { snapshot = { ...snapshot, ...patch }; for (const fn of [...listeners]) fn() }
   const message = (error) => (error && (error.message || error.code || String(error))) || ''
+  const failure = (value) => [value?.error?.code, value?.error?.diagnostic].filter(Boolean).join(': ') || 'failed'
+  // 이전 화면이 시작한 업데이트(자기 자신을 지웠다 다시 설치)가 끝나 새 버전이 뜬 경우 결과를 이어받는다.
+  const resume = async (mine) => {
+    const pending = storage.read()
+    if (!pending || typeof pending.requestId !== 'string') return false
+    if (now() - (pending.at || 0) > 15 * 60 * 1000) { storage.clear(); return false }
+    if (snapshot.current && pending.to && compareVersions(snapshot.current, pending.to) >= 0) {
+      storage.clear(); set({ phase: 'updated', from: pending.from, error: '' }); return true
+    }
+    const waited = await manager.waitForInstall?.(pending.requestId)
+    if (mine !== generation) return true
+    if (waited?.ok && waited.value) {
+      storage.clear()
+      const v = waited.value
+      set(v.application === 'failed' ? { phase: 'update-failed', error: failure(v) } : { phase: 'updated', from: pending.from, error: '' })
+      return true
+    }
+    storage.clear()
+    return false
+  }
   const check = async () => {
     const mine = ++generation
     if (!manager) { set({ phase: 'unavailable' }); return }
@@ -177,25 +204,44 @@ function createUpdater({ fetch: fetchImpl = (...args) => window.fetch(...args) }
       const latest = (await response.json())?.version
       if (mine !== generation) return
       if (typeof latest !== 'string') throw new Error('no version in package.json')
-      set({ phase: compareVersions(latest, current) > 0 ? 'available' : 'current', current, latest, source })
+      set({ current, latest, source })
+      if (await resume(mine)) return
+      if (mine !== generation) return
+      set({ phase: compareVersions(latest, current) > 0 ? 'available' : 'current' })
     } catch (error) {
       if (mine === generation) set({ phase: 'check-failed', error: message(error) })
     }
   }
-  const update = async () => {
-    if (!manager || snapshot.phase !== 'available' || !snapshot.source) return
-    const mine = ++generation
+  const settle = (value) => {
+    if (value.application === 'applied' || value.application === 'overridden') set({ phase: 'updated', from: snapshot.current })
+    else if (value.application === 'restart-required') set({ phase: 'restart' })
+    else if (value.application === 'cancelled') set({ phase: 'available', error: 'cancelled' })
+    else set({ phase: 'update-failed', error: failure(value) })
+  }
+  // 1단계: 확인 요청
+  const update = () => { if (manager && snapshot.phase === 'available' && snapshot.source) set({ phase: 'confirm', error: '' }) }
+  const cancel = () => { if (snapshot.phase === 'confirm') set({ phase: 'available' }) }
+  // 2단계: 실제 업데이트. 먼저 같은 주소로 다시 설치하고, Harness가 '이미 설치됨'으로 막으면
+  // 공식 플러그인 업데이트와 같은 방식(제거 → 다시 설치)으로 진행한다. 설정은 프로필에 따로 남는다.
+  const confirm = async () => {
+    if (!manager || snapshot.phase !== 'confirm' || !snapshot.source) return
+    const mine = ++generation, pm = manager, source = snapshot.source
+    const requestId = PLUGIN_ID + '-update-' + now()
     set({ phase: 'updating', error: '' })
     try {
-      const requestId = PLUGIN_ID + '-update-' + Date.now()
-      const result = await manager.installBundle(snapshot.source, { enabled: true, requestId })
-      if (mine !== generation) return
+      let result = await pm.installBundle(source, { enabled: true, requestId })
       if (!result?.ok) throw new Error(message(result?.error) || 'installBundle failed')
-      const value = result.value
-      if (value.application === 'applied' || value.application === 'overridden') set({ phase: 'updated' })
-      else if (value.application === 'restart-required') set({ phase: 'restart' })
-      else if (value.application === 'cancelled') set({ phase: 'available', error: 'cancelled' })
-      else set({ phase: 'update-failed', error: [value.error?.code, value.error?.diagnostic].filter(Boolean).join(': ') || 'failed' })
+      if (result.value.application === 'failed' && result.value.error?.code === 'already-installed') {
+        storage.write({ requestId, from: snapshot.current, to: snapshot.latest, source, at: now() })
+        const removed = await pm.removeBundle(PLUGIN_ID)
+        if (!removed?.ok) throw new Error(message(removed?.error) || 'removeBundle failed')
+        if (removed.value.application === 'failed' || removed.value.error) { storage.clear(); throw new Error(failure(removed.value)) }
+        // 이 시점에 이 화면은 내려갔을 수 있다. 설치 요청은 그대로 보낸다.
+        result = await pm.installBundle(source, { enabled: true, requestId })
+        if (!result?.ok) throw new Error(message(result?.error) || 'installBundle failed')
+      }
+      storage.clear()
+      if (mine === generation) settle(result.value)
     } catch (error) {
       if (mine === generation) set({ phase: 'update-failed', error: message(error) })
     }
@@ -207,6 +253,8 @@ function createUpdater({ fetch: fetchImpl = (...args) => window.fetch(...args) }
     detach() { manager = null; generation++; set({ phase: 'unavailable' }) },
     check,
     update,
+    cancel,
+    confirm,
   }
 }
 
@@ -219,8 +267,10 @@ function updateSection(updater, ko) {
     checking: t('업데이트를 확인하는 중입니다…', 'Checking for updates…'),
     current: t('최신 버전입니다.', 'You are up to date.'),
     available: t('새 버전이 있습니다.', 'A new version is available.'),
+    confirm: t('업데이트하는 동안 이 플러그인이 잠시 꺼졌다가 새 버전으로 다시 켜집니다. 설정은 그대로 남습니다. 혹시 실패하면 Plugins의 + Add plugin에서 같은 GitHub 주소로 다시 추가하세요.',
+      'The plugin turns off briefly and comes back as the new version. Settings are kept. If it fails, add the same GitHub address again from Plugins → + Add plugin.'),
     updating: t('업데이트하는 중입니다… 창을 닫지 마세요.', 'Updating… keep this window open.'),
-    updated: t('업데이트했습니다. 화면을 새로 고치면 새 버전이 적용됩니다.', 'Updated. Reload the window to use the new version.'),
+    updated: t('업데이트했습니다.' + (s.from ? ' (' + s.from + ' → ' + (s.current || s.latest) + ')' : ''), 'Updated.' + (s.from ? ' (' + s.from + ' → ' + (s.current || s.latest) + ')' : '')),
     restart: t('업데이트했습니다. Harness를 다시 시작하면 새 버전이 적용됩니다.', 'Updated. Restart Harness to use the new version.'),
     unsupported: t('GitHub 주소로 설치한 경우에만 여기서 업데이트할 수 있습니다.', 'Updates here work only for plugins installed from a GitHub address.'),
     pinned: t('특정 커밋에 고정해 설치해서 여기서는 업데이트하지 않습니다.', 'This install is pinned to a commit, so it is not updated here.'),
@@ -235,7 +285,9 @@ function updateSection(updater, ko) {
     React.createElement('p', { role: 'status', style: { margin: 0 } }, text, s.error ? ' (' + s.error + ')' : ''),
     React.createElement('div', { style: { display: 'flex', gap: 8 } },
       s.phase === 'available' ? button(t('업데이트', 'Update'), () => updater.update(), busy) : null,
-      s.phase !== 'unavailable' && s.phase !== 'updated' && s.phase !== 'restart'
+      s.phase === 'confirm' ? button(t('계속', 'Continue'), () => updater.confirm(), false) : null,
+      s.phase === 'confirm' ? button(t('취소', 'Cancel'), () => updater.cancel(), false) : null,
+      !['unavailable', 'updated', 'restart', 'confirm', 'updating'].includes(s.phase)
         ? button(t('다시 확인', 'Check again'), () => updater.check(), busy) : null))
 }
 
@@ -295,7 +347,7 @@ function apply(ctx) {
     const updater = createUpdater()
     // 플러그인 관리자는 선택적으로 연결: 없어도 캐릭터·테마·번역은 그대로 동작한다.
     if (typeof ctx.inject === 'function') {
-      ctx.inject(['remote.pluginManager'], (scope) => {
+      ctx.inject(['remote', 'remote.pluginManager'], (scope) => {
         updater.attach(scope.remote.pluginManager)
         scope.effect(() => () => updater.detach(), 'deepseek-harness-kr: updater')
       })
