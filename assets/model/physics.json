@@ -6172,7 +6172,7 @@
 						"Id": "ChestX1"
 					},
 					"VertexIndex": 1,
-					"Scale": 1.6,
+					"Scale": 1.9,
 					"Weight": 100,
 					"Type": "Angle",
 					"Reflect": false
@@ -6183,7 +6183,7 @@
 						"Id": "ChestX2"
 					},
 					"VertexIndex": 2,
-					"Scale": 1.44,
+					"Scale": 1.71,
 					"Weight": 100,
 					"Type": "Angle",
 					"Reflect": false
@@ -6194,7 +6194,7 @@
 						"Id": "ChestX3"
 					},
 					"VertexIndex": 3,
-					"Scale": 0.8,
+					"Scale": 0.95,
 					"Weight": 100,
 					"Type": "Angle",
 					"Reflect": true
@@ -6205,7 +6205,7 @@
 						"Id": "ChestXBS"
 					},
 					"VertexIndex": 4,
-					"Scale": 0.8,
+					"Scale": 0.95,
 					"Weight": 100,
 					"Type": "Angle",
 					"Reflect": true
