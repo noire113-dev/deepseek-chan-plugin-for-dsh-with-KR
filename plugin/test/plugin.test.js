@@ -214,11 +214,30 @@ test('plugin settings page exposes three independently checked switches', () => 
     assert(Page)
     const html = renderToStaticMarkup(React.createElement(Page, { view: 'page' }))
     assert.equal((html.match(/role="switch"/g) || []).length, 3)
-    assert.equal((html.match(/checked=""/g) || []).length, 1)
+    assert.equal((html.match(/<input type="checkbox" role="switch" checked=""/g) || []).length, 1)
     assert.match(html, /Character and speech bubbles/)
     assert.match(html, /Pastel theme/)
     assert.match(html, /Korean language pack/)
     ctx.dispose()
+  } finally { h.dom.window.close() }
+})
+
+test('settings page offers accessories, outfit and body type, and shares them with the character', async () => {
+  const h = clientHarness({ character: false, theme: false, translation: false, glasses: true, bodyType: 'type2' })
+  try {
+    const ctx = h.ctx(); h.client.apply(ctx)
+    const Page = h.pages.get(packageName + '#deepseek-harness-kr')
+    const html = renderToStaticMarkup(React.createElement(Page, { view: 'page' }))
+    assert.match(html, /aria-label="Accessories and outfit"/)
+    for (const label of ['Glasses', 'Monocle', 'Change skirt length', 'Change top', 'Take off shoes', 'Hide tail']) assert.match(html, new RegExp(label))
+    assert.doesNotMatch(html, /basin|Lean forward/i)
+    assert.equal((html.match(/type="radio"/g) || []).length, 3)
+    assert.match(html, /type="radio" name="deepseek-harness-kr-body" checked=""[^>]*\/><span>Body type 2 \(chibi\)/)
+    assert.deepEqual({ ...h.dom.window.__dscOutfit }, { glasses: true, monocle: false, skirt: false, chestClothes: false, shoesOff: false, tailHide: false, bodyType: 'type2' })
+    await h.form.set('bodyType', 'type1')
+    assert.equal(h.dom.window.__dscOutfit.bodyType, 'type1')
+    ctx.dispose()
+    assert.equal(h.dom.window.__dscOutfit, undefined)
   } finally { h.dom.window.close() }
 })
 

@@ -2,6 +2,16 @@
 const ROOT = '/deepseek-harness-kr/assets/'
 const SLOT = '__deepseekHarnessKrDispose'
 const ENTRY_ID = 'deepseek-harness-kr'
+// 소품·옷 (데스크톱 펫 메뉴와 같은 항목, 세숫대야·앞으로 숙이기는 뺌)과 체형
+const OUTFIT_FIELDS = [
+  ['glasses', '뿔테 안경', 'Glasses'],
+  ['monocle', '외눈 안경', 'Monocle'],
+  ['skirt', '치마 길이 바꾸기', 'Change skirt length'],
+  ['chestClothes', '가슴 옷 바꾸기', 'Change top'],
+  ['shoesOff', '신발 벗기', 'Take off shoes'],
+  ['tailHide', '꼬리 숨기기', 'Hide tail'],
+]
+const BODY_TYPES = [['default', '기본 체형', 'Default'], ['type1', '체형 1', 'Body type 1'], ['type2', '체형 2 (꼬마)', 'Body type 2 (chibi)']]
 const React = require('react')
 
 function createLifetime() {
@@ -313,11 +323,25 @@ function settingsPage(ctx, form, updater) {
       } catch { setError(ko ? '설정을 저장하지 못했습니다.' : 'Could not save settings.') }
       finally { setPending(false) }
     }
+    const row = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 24 }
+    const off = !state.writable || pending
+    const outfitSwitch = ([field, label]) => React.createElement('label', { key: field, style: row },
+      React.createElement('span', null, label),
+      React.createElement('input', { type: 'checkbox', checked: state.value?.[field] === true, disabled: off, onChange: (event) => change(field, event.target.checked) }))
+    const bodyType = state.value?.bodyType || 'default'
     return React.createElement('div', { style: { display: 'grid', gap: 16 } },
-      ...fields.map(([field, label]) => React.createElement('label', { key: field, style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 24 } },
+      ...fields.map(([field, label]) => React.createElement('label', { key: field, style: row },
         React.createElement('span', null, label),
-        React.createElement('input', { type: 'checkbox', role: 'switch', checked: state.value?.[field] !== false, disabled: !state.writable || pending, onChange: (event) => change(field, event.target.checked) }))),
+        React.createElement('input', { type: 'checkbox', role: 'switch', checked: state.value?.[field] !== false, disabled: off, onChange: (event) => change(field, event.target.checked) }))),
       React.createElement('p', { style: { opacity: 0.7 } }, ko ? '변경 사항은 바로 적용되고 저장됩니다. 한국어는 Settings → General → Language에서 선택할 수 있습니다.' : 'Changes apply and save immediately. Select Korean under Settings → General → Language.'),
+      React.createElement('section', { 'aria-label': ko ? '소품·옷' : 'Accessories and outfit', style: { display: 'grid', gap: 10, borderTop: '1px solid rgba(127,127,127,.25)', paddingTop: 14 } },
+        React.createElement('strong', null, ko ? '소품·옷' : 'Accessories and outfit'),
+        ...OUTFIT_FIELDS.map(([field, koLabel, enLabel]) => outfitSwitch([field, ko ? koLabel : enLabel]))),
+      React.createElement('section', { 'aria-label': ko ? '체형' : 'Body type', style: { display: 'grid', gap: 10, borderTop: '1px solid rgba(127,127,127,.25)', paddingTop: 14 } },
+        React.createElement('strong', null, ko ? '체형' : 'Body type'),
+        ...BODY_TYPES.map(([value, koLabel, enLabel]) => React.createElement('label', { key: value, style: { display: 'flex', alignItems: 'center', gap: 10 } },
+          React.createElement('input', { type: 'radio', name: 'deepseek-harness-kr-body', checked: bodyType === value, disabled: off, onChange: () => change('bodyType', value) }),
+          React.createElement('span', null, ko ? koLabel : enLabel)))),
       error ? React.createElement('p', { role: 'alert' }, error) : null,
       updateSection(updater, ko))
   }
@@ -361,7 +385,10 @@ function apply(ctx) {
       reconcile('layout', value.character !== false || value.theme !== false, mountLayout)
       reconcile('theme', value.theme !== false, (feature) => mountTheme(ctx, feature))
       reconcile('character', value.character !== false, startCharacter)
+      // 캐릭터는 매 프레임 이 값을 읽어 소품·옷·체형을 바로 바꾼다 (다시 띄우지 않음)
+      window.__dscOutfit = Object.fromEntries([...OUTFIT_FIELDS.map(([field]) => [field, value[field] === true]), ['bodyType', value.bodyType || 'default']])
     }
+    life.add(() => { delete window.__dscOutfit })
     life.add(form.subscribe(sync))
     life.add(ctx.slots.inject('plugins.row.config', () => ctx.slots.register({
       name: 'plugins.row.config', key: PLUGIN_ID + '#' + ENTRY_ID,

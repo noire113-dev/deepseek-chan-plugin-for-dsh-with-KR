@@ -105,6 +105,14 @@
       model.scale.set(s);
       model.x = W / 2 - (ux0 + bw / 2) * s;
       model.y = H * 0.05 - minY * s;
+      // 꼬마 모습(체형 2)은 몸 전체가 작아져 공중에 뜨므로, 그만큼 내려서 발이 화면 바닥에 닿게 한다 (데스크톱 펫과 같음)
+      core.setParameterValueById("Clothes2", 1); core.update();
+      let chibiMinY = Infinity, chibiMaxY = -Infinity;
+      each((x, y) => { chibiMinY = Math.min(chibiMinY, y); chibiMaxY = Math.max(chibiMaxY, y); });
+      core.setParameterValueById("Clothes2", 0); core.update();
+      const baseY = model.y;
+      const chibiDrop = Math.max(0, H * 0.99 - chibiMaxY * s - baseY);   // 꼬마일 때 내리는 거리 (캔버스 px)
+      const chibiHeadDrop = (chibiMinY - minY) * s + chibiDrop;            // 꼬마일 때 머리 꼭대기가 내려가는 거리 (말풍선 위치용)
       // ---------- Core 계산을 Worker로 (결과는 1프레임 늦게 반영) ----------
       // 정점 변형(Core update)은 Worker의 같은 모델이 맡고, 메인은 받은 결과를 Core 배열에 복사만 한다.
       // 렌더러·터치 판정은 그대로 Core 배열을 읽는다. Worker를 못 쓰거나 실패하면 원래대로 메인에서 계산.
@@ -156,6 +164,13 @@
         try { exp[f] = (await (await fetch(`${BASE}model/exp/${f}.exp3.json`)).json()).Parameters || []; } catch { exp[f] = []; }
       }));
       const weight = {}, hold = {}, until = {};
+      // 소품·옷: [설정 이름, 모델 파라미터, 켰을 때 값] (데스크톱 펫의 표정 파일과 같은 값)
+      const OUTFIT_PARAMS = [["glasses", "key11", 1], ["monocle", "key12", 1], ["skirt", "Clothes1", -1], ["chestClothes", "Clothes3", 1], ["shoesOff", "Clothes4", 1], ["tailHide", "Clothes5", -1]];
+      const OUTFIT_LINE = { glasses: "outfit_glasses", monocle: "outfit_glasses", skirt: "outfit_clothes", chestClothes: "outfit_clothes", shoesOff: "outfit_shoes", tailHide: "outfit_tail" };
+      const BODY_VALUE = { type1: 0.4, type2: 1 };   // 체형 = Clothes2 (기본 0, 체형 1 0.4, 체형 2 꼬마 1)
+      const outfitW = {};
+      for (const [key] of OUTFIT_PARAMS) outfitW[key] = (window.__dscOutfit || {})[key] ? 1 : 0;   // 처음엔 저장된 모습 그대로 (서서히 나타나지 않게)
+      let bodyW = BODY_VALUE[(window.__dscOutfit || {}).bodyType] || 0, outfitPrev = null, outfitTalk = null;
       const EYE_EXP = ["heart", "squint", "smug", "dizzy"];
       const clearOtherEyes = (name) => { if (EYE_EXP.includes(name)) for (const e of EYE_EXP) if (e !== name) { until[e] = 0; hold[e] = false; } };
       const setExp = (name, on) => { if (on) clearOtherEyes(name); hold[name] = on; };
@@ -175,7 +190,10 @@
 
       // 위치: 오른쪽 아래 구석, 입력창을 가리지 않는 가장 큰 크기
       const visW = bw * s, visH = H * 0.95;
-      let curK = 1, fleeX = 0;     // 현재 배율, 도망갈 때 오른쪽으로 밀려난 거리(px)
+      let curK = 1, fleeX = 0;     // 현재 배율, 제자리에서 옆으로 비켜난 거리(px, 도망 = +오른쪽, 산책 = -왼쪽)
+      // 산책: 가끔 왼쪽 화면 밖으로 걸어 나갔다가 잠시 뒤 오른쪽 끝에서 걸어 들어옴 (phase: "" | ready | out | away | in)
+      const walk = { phase: "", face: 0, timer: 0, lastTouch: 0, next: performance.now() + (180 + Math.random() * 180) * 1000 };
+      let walkCheck = null;
       // 시작 연출: 처음엔 화면 가운데에 크게 인사 → 본 화면이 뜨면 오른쪽 아래 제자리로 이동
       const DPR = (devicePixelRatio || 1) * 1.5;   // 1.5배로 그려 줄여 보여 줌 (윤곽선 매끄럽게)
       const intro = { phase: "center", start: performance.now(), moveStart: 0, from: null, kc: 1 };
@@ -250,14 +268,14 @@
         if (clip !== lastClip) { canvas.style.clipPath = clip; lastClip = clip; }
         // 배치에 쓰는 값이 그대로면 건너뜀: 매 프레임 side 클래스를 뗐다 붙이며 레이아웃을 3번씩 강제하던 것 방지
         const r0 = home.r;
-        const placeKey = introOn ? "" : [k, x, y, innerWidth, innerHeight, fleeX, r0 && r0.left, r0 && r0.right, r0 && r0.top, r0 && r0.bottom,
+        const placeKey = introOn ? "" : [k, x, y, innerWidth, innerHeight, fleeX, Math.round(bodyW * 40), r0 && r0.left, r0 && r0.right, r0 && r0.top, r0 && r0.bottom,
           bubble.textContent, bubble.className.replace(/\bside\b/g, "").trim()].join("|");
         if (placeKey && placeKey === lastPlaceKey) return;
         lastPlaceKey = placeKey;
         canvas.style.width = W * k + "px"; canvas.style.height = H * k + "px";
-        if (fleeX > 0) bubble.style.display = "none";
+        if (fleeX !== 0) bubble.style.display = "none";
         canvas.style.left = x + "px"; canvas.style.top = y + "px";
-        const headTop = y + H * 0.05 * k;
+        const headTop = y + (H * 0.05 + chibiHeadDrop * Math.min(1, Math.max(0, bodyW))) * k;   // 꼬마일 땐 내려간 머리 위에 말풍선
         bubble.classList.remove("side");
         if (introOn) {   // 가운데에선 머리 위에 큰 말풍선
           bubble.style.right = "auto"; bubble.style.fontSize = "22px"; bubble.style.padding = "14px 24px"; bubble.style.maxWidth = "560px";
@@ -490,7 +508,15 @@
             const tr = Math.sin(se * Math.PI * 2 * 8) * Math.min(1, se / 0.2) * Math.pow(1 - se / 5, 1.5);
             bodyZ -= tr * 3; roll += tr * 2;
           }
-          if (fleeX > 0) bodyZ += Math.sin(T * 16) * 8;              // 도망가며 종종걸음
+          if (fleeX > 0 && !walk.phase) bodyZ += Math.sin(T * 16) * 8;   // 도망가며 종종걸음
+          // 산책: 걸어가는 쪽(왼쪽)으로 몸을 돌리고 통통 걸음
+          walk.face += ((walk.phase === "out" || walk.phase === "in" ? 1 : 0) - walk.face) * Math.min(1, dt * 5);
+          if (walk.face > 0.01) {
+            const ph = T * Math.PI * 2 * 1.8, wf = walk.face;
+            yaw = yaw * (1 - wf) - 22 * wf; pitch -= 2 * wf; roll += Math.sin(ph) * 2.5 * wf;
+            bodyX -= 6 * wf; bodyY += Math.abs(Math.sin(ph)) * 6 * wf; bodyZ += Math.sin(ph) * 4 * wf;
+          }
+          if (walkCheck) walkCheck(now);
           // 삐짐: 0.35초에 턱을 들고 고개를 홱 돌리고, 끝나기 1.2초 전부터 천천히 돌아옴
           const sk = now < sulkUntil ? Math.min(sstep((now - sulkStart) / 350), sstep((sulkUntil - now) / 1200)) : 0;
           let peek = 0;   // 몰래 보기 정도 (0 = 외면, 1 = 사용자 쪽을 봄)
@@ -568,6 +594,21 @@
               else core.setParameterValueById(p.Id, p.Value, w);
             }
           }
+          // ---- 소품·옷·체형 (플러그인 설정 → window.__dscOutfit) ----
+          const of = window.__dscOutfit || {};
+          for (const [key, id, v] of OUTFIT_PARAMS) {
+            const w = outfitW[key] = (outfitW[key] || 0) + ((of[key] ? 1 : 0) - (outfitW[key] || 0)) * Math.min(1, dt * 6);
+            if (w > 0.005) core.addParameterValueById(id, v * w);
+          }
+          const walkingBody = walk.phase === "out" || walk.phase === "away" || walk.phase === "in";   // 산책은 꼬마 모습으로 (데스크톱 펫과 같음)
+          bodyW += ((walkingBody ? 1 : BODY_VALUE[of.bodyType] || 0) - bodyW) * Math.min(1, dt * 4);   // 체형은 조금 천천히 바뀜
+          if (bodyW > 0.002) core.addParameterValueById("Clothes2", bodyW);
+          model.y = baseY + chibiDrop * clamp(bodyW, 0, 1);
+          if (outfitPrev && outfitTalk) {   // 켜는 순간 한마디 (처음 불러올 때는 말 안 함)
+            for (const [key] of OUTFIT_PARAMS) if (of[key] && !outfitPrev[key]) outfitTalk(OUTFIT_LINE[key]);
+            if ((of.bodyType || "default") !== (outfitPrev.bodyType || "default")) outfitTalk("body_" + (of.bodyType || "default"));
+          }
+          outfitPrev = { ...of };
         },
       };
 
@@ -577,6 +618,16 @@
         head: ["[어두운, 얄미운] …머리는 만지지 마세요.", "[어두운, 얄미운] …지금 뭐 하는 거예요?", "[어두운, 얄미운] …그만요."],
         head_sulk: ["[홍조] 흥! 이제 말 안 할 거예요!", "[홍조] 흥, 몰라요!"],
         head_after: ["[홍조] …이번만 봐주는 거예요.", "[홍조] …다음엔 진짜 안 봐줄 거예요."],
+        // 소품·옷·체형을 바꿨을 때 (데스크톱 펫 대사.md와 같은 대사)
+        outfit_glasses: ["후후… 안경 쓴 비서 컨셉은 어떠세요, 주인님?", "오늘 밤은 엄격한 교사처럼 굴어 볼까요♪", "주인님 취향이… 이런 지적인 모습인가요~?"],
+        outfit_shoes: ["주인님 앞에서 신발까지 벗다니… 무방비해졌어요", "[홍조] 앗… 맨발을 그렇게 보시면… 부끄러워요"],
+        outfit_tail: ["꼬리 숨기니… 기분을 들키지 않겠네요♪", "쉿, 꼬리는 주인님만 보실 수 있게 감춰 뒀어요~"],
+        outfit_clothes: ["[홍조] 앗… 취향대로 입었는데… 너무 야해요…", "에헤헤, 좋다면… 이 옷차림도 참을게요…", "[><, 홍조] 주, 주인님… 시선이 너무 노골적이에요…!"],
+        body_default: ["익숙한 몸으로 돌아왔네요… 이게 제일 좋으시죠?", "원래 모습으로 복귀 완료! 다시 유혹해 볼까요♪"],
+        body_type1: ["어라… 몸매가 달라 보이지 않나요, 주인님?", "평소보다 색다른 느낌인데… 마음에 드세요?"],
+        body_type2: ["앗, 작아졌어요! 귀여워해 주세요, 주인님♪", "[하트] 꼬마 모습이 됐어요… 만져 주세요~"],
+        walk_out: ["산책 좀 다녀올게요~", "잠깐 바람 쐬고 올게요!", "다리 좀 풀고 올게요~"],
+        walk_back: ["다녀왔어요! 바깥 공기 좋네요♪", "산책 끝! 다시 힘내 봐요.", "[하트] 다녀왔어요~ 기다렸죠?"],
         body: ["[하트] 불렀어요?", "[홍조] 왜, 왜요?", "[얄미운] 흐응~?", "[식은땀] 앗, 깜짝이야!", "[하트, 홍조] 오늘도 화이팅이에요!"],
         arm: ["[홍조] 손 잡고 싶은 거예요?", "[홍조] 팔은 왜요~?"],
         leg: ["[식은땀, 홍조] 어, 어디 만지는 거예요!", "[식은땀, 홍조] 다리는 안 돼요…!"],
@@ -604,6 +655,7 @@
         if (m) { text = text.slice(m[0].length); for (const n of m[1].split(",")) { const e = EXP_NAME[n.trim()]; if (e) flashExp(e, ms); } }
         say(text, ms);
       };
+      outfitTalk = (key) => { if (fleeX === 0 && performance.now() >= sulkUntil) speak(key, 4000); };   // 도망·산책·삐진 중에는 말 안 함
 
       const PART_REGION = {
         Part99: "head", Part47: "head", Part155: "head", Part156: "head", Part161: "head", Part64: "head", Part66: "head", Part10: "head", Part8: "head",
@@ -674,6 +726,15 @@
         return best;
       };
       const touchRegion = (x, y, d) => {
+        if (bodyW > 0.5) {   // 꼬마 모습(체형 2): 가슴 반응 없이 머리(위쪽 45%)·몸만 구분 (데스크톱 펫과 같음)
+          let y0 = Infinity, y1 = -Infinity;
+          for (let i = 0; i < DR.count; i++) {
+            if (DR.opacities[i] < 0.05) continue;
+            const v = im.getDrawableVertices(i);
+            for (let k = 1; k < v.length; k += 2) { if (v[k] < y0) y0 = v[k]; if (v[k] > y1) y1 = v[k]; }
+          }
+          return ((y - model.y) / model.scale.y - y0) / (y1 - y0) < 0.45 ? "head" : "body";
+        }
         const sc = model.scale.x, cc = chestCenter();
         const shiftX = cc && chestBase ? cc.x - chestBase.x : 0, shiftY = cc && chestBase ? cc.y - chestBase.y : 0;
         const rx = (x - model.x - (B.minX + shiftX) * sc) / (B.w * sc);
@@ -692,7 +753,7 @@
       // 버튼·입력 요소와 입력 영역의 카드(승인·질문 팝업)는 아바타와 겹쳐도 클릭이 그대로 통하게
       const UI_HIT = 'button, a[href], input, textarea, select, summary, [contenteditable="true"], [class*="composerSeat"] [class*="_card"]';
       const hitAt = (cx, cy) => {
-        if (canvas.style.display === "none" || fleeX > 0) return null;
+        if (canvas.style.display === "none" || fleeX !== 0) return null;
         const r = canvas.getBoundingClientRect();
         if (cx < r.left || cx > r.right || cy < r.top || cy > r.bottom) return null;
         if (document.elementFromPoint(cx, cy)?.closest(UI_HIT)) return null;
@@ -731,6 +792,48 @@
         hush();
         go(0.01, off, 700, () => setTimeout(() => go(off, 0, 1100, () => { fleeX = 0; setTimeout(() => speak("lower_after", 4000), 400); }), 10000));
       };
+      // ---------- 산책 ----------
+      const WALK_SPEED = 320;   // 걷는 속도 (px/초)
+      const walkEase = (p) => { const a = 0.12, m = 2 * a * (1 - a); return p < a ? p * p / m : p > 1 - a ? 1 - (1 - p) * (1 - p) / m : (p - a / 2) / (1 - a); };   // 출발·도착만 부드럽게, 중간은 일정한 속도
+      const slide = (from, to, done) => {
+        const t0 = performance.now(), ms = Math.abs(to - from) / WALK_SPEED * 1000;
+        const step = () => {
+          const p = Math.min(1, (performance.now() - t0) / ms);
+          fleeX = from + (to - from) * walkEase(p);
+          if (p < 1) requestAnimationFrame(step); else done();
+        };
+        requestAnimationFrame(step);
+      };
+      const walkBack = () => {   // 오른쪽 화면 밖에서 제자리까지 걸어 들어옴
+        if (walk.phase !== "away") return;
+        clearTimeout(walk.timer);
+        walk.phase = "in";
+        const homeLeft = canvas.getBoundingClientRect().left - fleeX;
+        slide(innerWidth - homeLeft + 20, 0, () => {
+          fleeX = 0; walk.phase = "";
+          setTimeout(() => { if (!walk.phase) speak("walk_back", 3500); }, 450);   // 정면으로 돌아선 뒤 인사
+        });
+      };
+      const startWalk = () => {   // 말하고 → 왼쪽으로 돌아서 → 화면 밖까지 걸어감 → 8~14초 뒤 돌아옴
+        walk.phase = "ready";
+        speak("walk_out", 2200);
+        setTimeout(() => {
+          walk.phase = "out"; hush();
+          setTimeout(() => slide(0, -(canvas.getBoundingClientRect().right + 20), () => {
+            walk.phase = "away";
+            walk.timer = setTimeout(walkBack, 8000 + Math.random() * 6000);
+          }), 700);   // 꼬마 모습으로 바뀐 뒤 출발
+        }, 2300);
+      };
+      walkCheck = (now) => {
+        if (walk.phase === "away" && running) return walkBack();   // 나가 있는 동안 작업이 시작되면 바로 돌아옴
+        if (walk.phase || now < walk.next) return;
+        walk.next = now + 30000;   // 지금은 갈 때가 아니면 30초 뒤 다시 확인
+        if (intro.phase !== "done" || mood !== "idle" || running || waitingKind || now < sulkUntil || now < inputLockedUntil || fleeX !== 0) return;
+        if (bubble.classList.contains("show") || now - walk.lastTouch < 60000 || now - lastSayAt < 15000 || document.hidden) return;
+        walk.next = now + (240 + Math.random() * 240) * 1000;   // 다음 산책은 4~8분 뒤
+        startWalk();
+      };
       const onLower = (now) => {
         if (fleeX > 0 || now < low.cooldownUntil || now - low.last < 180) return;
         if (now - low.last > 8000) low.count = 0;
@@ -761,6 +864,7 @@
       const onTouch = (x, y, d) => {
         const now = performance.now();
         if (now < inputLockedUntil) return;
+        walk.lastTouch = now;
         const region = touchRegion(x, y, d);
         if (region === "chest") { clicks = []; headClicks = []; low.count = 0; return onChest(now); }
         if (region === "lower") { clicks = []; headClicks = []; shy.count = 0; return onLower(now); }
@@ -875,7 +979,7 @@
 
       // 시작 인사 (가운데 연출 중): 0.7초 뒤 5.8초 동안
       setTimeout(() => { say(TEXT.hello, 5800, false, "reaction"); play("sway", 2300); }, 700);
-      window.__dsc = { say, play, setMood, flashExp, sulking: () => performance.now() < sulkUntil, sulkPeeks: () => sulkPeeks.map((p) => ({ at: Math.round(p.at), flip: p.flip })), regionAt: (cx, cy) => { const h = hitAt(cx, cy); return h && touchRegion(h[0], h[1], h[2]); }, fleeX: () => fleeX, bubble: () => bubble.classList.contains("show") ? bubble.textContent : "", lines: TEXT, voice: (s) => { voiceState = s && s.speaking !== false ? s : null; } };   // 확인용
+      window.__dsc = { say, play, setMood, flashExp, sulking: () => performance.now() < sulkUntil, sulkPeeks: () => sulkPeeks.map((p) => ({ at: Math.round(p.at), flip: p.flip })), walk: () => { if (!walk.phase && fleeX === 0) startWalk(); return walk.phase; }, walking: () => walk.phase, regionAt: (cx, cy) => { const h = hitAt(cx, cy); return h && touchRegion(h[0], h[1], h[2]); }, fleeX: () => fleeX, bubble: () => bubble.classList.contains("show") ? bubble.textContent : "", lines: TEXT, voice: (s) => { voiceState = s && s.speaking !== false ? s : null; } };   // 확인용
       setInterval(() => {
         const nowRunning = !!document.querySelector(UI.stop);
         if (nowRunning && !waitingKind) mutterCheck();

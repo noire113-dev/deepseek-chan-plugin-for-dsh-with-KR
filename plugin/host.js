@@ -12,6 +12,14 @@ export const Config = z.object({
   character: z.boolean().default(true).volatile(),
   theme: z.boolean().default(true).volatile(),
   translation: z.boolean().default(true).volatile(),
+  // 소품·옷·체형 (데스크톱 펫의 "소품·옷" 메뉴와 같은 항목)
+  glasses: z.boolean().default(false).volatile(),
+  monocle: z.boolean().default(false).volatile(),
+  skirt: z.boolean().default(false).volatile(),
+  chestClothes: z.boolean().default(false).volatile(),
+  shoesOff: z.boolean().default(false).volatile(),
+  tailHide: z.boolean().default(false).volatile(),
+  bodyType: z.union([z.const('default'), z.const('type1'), z.const('type2')]).default('default').volatile(),
 })
 export const ASSET_PATH = '/deepseek-harness-kr/assets'
 const assets = fileURLToPath(new URL('../assets/', import.meta.url))
