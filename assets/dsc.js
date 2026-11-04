@@ -391,6 +391,8 @@
         talk = { syl, t0: performance.now(), total, quiet };
       };
       const VOW = ["A", "I", "U", "E", "O"];
+      // 이 모델은 "이"·"에" 입 모양이 볼과 아래 눈꺼풀까지 올려 눈이 가늘어진다. 말할 때 눈 아래가 오르내리지 않게 약하게 씀
+      const VOW_EYE_SAFE = { I: 0.45, E: 0.45 };
       const vowel = { A: 0, I: 0, U: 0, E: 0, O: 0 };
       let mouthOpen = 0, browKick = 0, browVal = 0, nodKick = 0, lastStressIdx = -1;   // browKick = 눈썹(귀) 목표, browVal = 실제로 부드럽게 따라가는 값
       let voiceState = null;   // 외부 음성 상태(선택): { speaking, level, vowels, until } | null — 없으면 예전 그대로
@@ -569,7 +571,7 @@
             core.setParameterValueById("ParamMouthOpenY", openNow * 0.9);
             core.addParameterValueById("JawOpen", openNow * 0.45);
             core.setParameterValueById("ParamSilence", 1 - openNow);
-            for (const k of VOW) if (vowel[k] > 0.01) core.addParameterValueById("Param" + k, Math.min(1, vowel[k]));
+            for (const k of VOW) if (vowel[k] > 0.01) core.addParameterValueById("Param" + k, Math.min(1, vowel[k]) * (VOW_EYE_SAFE[k] || 1));
             if (mouthAdd > 0.01) core.addParameterValueById("ParamA", mouthAdd * 0.8);
           }
           const baseSmile = (mood === "sad" ? 0 : mood === "wait" ? 0.15 : 0.35) * (1 - sk);
