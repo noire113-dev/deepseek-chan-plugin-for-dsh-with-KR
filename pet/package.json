@@ -1,0 +1,7 @@
+{
+  "name": "dsc-pet",
+  "productName": "DeepSeekChan Pet",
+  "version": "0.0.0",
+  "private": true,
+  "main": "main.cjs"
+}

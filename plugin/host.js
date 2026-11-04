@@ -6,9 +6,10 @@ import { fileURLToPath } from 'node:url'
 import { pipeline } from 'node:stream/promises'
 import { normalize as normalizeTts } from '../plugins/dsh-tts/src/config.js'
 import { registerSpeechRoutes } from '../plugins/dsh-tts/src/index.js'
+import { createPetHandler, createPetManager, PET_PATH } from './pet-host.js'
 
 export const name = 'deepseek-harness-kr'
-export const inject = ['webServer']
+export const inject = ['webServer', 'connection']
 
 // 말풍선 음성(TTS). 설정 화면이 쓰는 값은 모두 volatile이어야 한다(Settings는 volatile 필드만 쓴다).
 // 값의 범위·형식 검사는 요청마다 dsh-tts normalize가 맡고, 잘못된 값은 /dsh-tts/state가 이유를 알려 준다.
@@ -97,4 +98,10 @@ export function apply(ctx, config) {
   ctx.effect(() => ctx.webServer.register({ kind: 'prefix', path: ASSET_PATH, handler: createAssetHandler() }), 'deepseek-harness-kr: assets')
   // 말풍선 음성: 설정 화면에서 바꾼 값(volatile)을 요청마다 다시 읽는다. 꺼져 있으면 404.
   registerSpeechRoutes(ctx, () => normalizeTts(readLive(config?.tts)))
+  ctx.effect(() => {
+    const pet = createPetManager({ assets })
+    const rejection = (req) => { const c = ctx.connection; return typeof c?.requestRejection === 'function' ? c.requestRejection(req) : 503 }
+    const unregister = ctx.webServer.register({ kind: 'prefix', path: PET_PATH, handler: createPetHandler(pet, rejection) })
+    return () => { unregister?.(); pet.dispose() }
+  }, 'deepseek-harness-kr: pet')
 }
