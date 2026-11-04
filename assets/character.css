@@ -24,6 +24,8 @@
 
 /* 캐릭터 위에서는 손가락 커서 */
 html.dsc-hover, html.dsc-hover * { cursor: pointer !important; }
+/* 끌어서 옮기는 동안 */
+html.dsc-grabbing, html.dsc-grabbing * { cursor: grabbing !important; user-select: none !important; }
 
 /* 추론 혼잣말 말풍선: 점선, 연한 글씨 */
 #dsc-bubble.mutter {

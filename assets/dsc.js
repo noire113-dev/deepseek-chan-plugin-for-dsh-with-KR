@@ -198,9 +198,26 @@
 
       // 위치: 오른쪽 아래 구석, 입력창을 가리지 않는 가장 큰 크기
       const visW = bw * s, visH = H * 0.95;
-      let curK = 1, fleeX = 0;     // 현재 배율, 제자리에서 옆으로 비켜난 거리(px, 도망 = +오른쪽, 산책 = -왼쪽)
-      // 산책: 가끔 왼쪽 화면 밖으로 걸어 나갔다가 잠시 뒤 오른쪽 끝에서 걸어 들어옴 (phase: "" | ready | out | away | in)
-      const walk = { phase: "", face: 0, timer: 0, lastTouch: 0, next: performance.now() + (180 + Math.random() * 180) * 1000 };
+      let curK = 1, fleeX = 0;     // 현재 배율, 도망·산책으로 옆으로 비켜난 거리(px, + 오른쪽 · - 왼쪽)
+      // 자유 위치: 끌어서 옮긴 자리 (창 좌표). 제자리 근처에 놓으면 다시 붙음.
+      const free = { on: false, x: 0, y: 0, k: 1, anim: null };
+      const drag = { pending: null, on: false, x: 0, y: 0, samples: [] };
+      const carry = { vx: 0, vy: 0 };              // 끄는 속도(px/초) → 몸이 관성으로 쏠리고 머리카락·치마가 흔들림
+      const shown = { k: 1, x: 0, y: 0 };          // 지난 프레임에 그린 자리 (끌기 시작점)
+      const FREE_KEY = "dsc-free-pos";
+      // 자유 위치는 창 크기 비율로 기억: 몸 가운데의 가로 비율(fx)·그림 아래 끝의 세로 비율(fy).
+      // 창 크기가 바뀌면 같은 비율 자리로 옮겨 가서, 최대화를 풀어도 옛 픽셀 자리에 남아 화면 밖으로 밀리지 않음
+      const freeToRatio = () => { free.fx = (free.x + W * free.k / 2) / innerWidth; free.fy = (free.y + H * free.k) / innerHeight; };
+      try {
+        const s = JSON.parse(localStorage.getItem(FREE_KEY) || "null");
+        if (s && isFinite(s.fx) && isFinite(s.fy) && s.k > 0) Object.assign(free, { on: true, fx: s.fx, fy: s.fy, k: s.k });
+      } catch {}
+      const saveFree = (fromPose = true) => {   // fromPose: 지금 x·y에서 비율을 다시 계산 (휠처럼 크기만 바꿀 땐 비율을 그대로 둠)
+        if (free.on && fromPose) freeToRatio();
+        try { if (free.on) localStorage.setItem(FREE_KEY, JSON.stringify({ fx: +free.fx.toFixed(4), fy: +free.fy.toFixed(4), k: +free.k.toFixed(3) })); else localStorage.removeItem(FREE_KEY); } catch {}
+      };
+      // 산책: 가끔 가까운 쪽 화면 밖으로 걸어 나갔다가 잠시 뒤 같은 쪽에서 걸어 들어옴 (phase: "" | ready | out | away | in, dir: -1 왼쪽 · 1 오른쪽)
+      const walk = { phase: "", face: 0, dir: -1, out: 0, timers: [], slideId: 0, lastTouch: 0, next: performance.now() + (180 + Math.random() * 180) * 1000 };
       let walkCheck = null;
       // 시작 연출: 처음엔 화면 가운데에 크게 인사 → 본 화면이 뜨면 오른쪽 아래 제자리로 이동
       const DPR = (devicePixelRatio || 1) * 1.5;   // 1.5배로 그려 줄여 보여 줌 (윤곽선 매끄럽게)
@@ -242,12 +259,65 @@
         return { k, x: innerWidth / 2 - W * k / 2, y: innerHeight - H * k };
       };
       intro.kc = centerPose().k; setRes(intro.kc);
+
+      // ---------- 자유 위치 계산 ----------
+      // 캔버스 왼쪽 위(x, y)·배율 k일 때 보이는 몸 영역 (양옆 빈 곳·머리 위 여백 제외). 커서가 몸 위인지 판정할 때 씀
+      const bodyRect = (x, y, k) => { const side = (W - visW) / 2 * k; return { l: x + side, t: y + H * 0.05 * k, r: x + W * k - side, b: y + H * k }; };
+      const easeOut = (p) => 1 - Math.pow(1 - p, 3);
+      const easeBack = (p) => { const c = 1.25, q = p - 1; return 1 + (c + 1) * q * q * q + c * q * q; };   // 끝에서 살짝 넘쳤다 돌아옴 (자석에 붙는 느낌)
+      const area = () => ({ l: 0, t: 0, r: innerWidth, b: innerHeight });
+      const keepIn = (p) => {   // 보이는 몸이 영역 밖으로 다 나가지 않게
+        const a = area(), side = (W - visW) / 2 * p.k;
+        return { k: p.k, x: Math.min(Math.max(p.x, a.l - side), a.r - W * p.k + side), y: Math.min(Math.max(p.y, a.t - H * p.k * 0.05), a.b - H * p.k * 0.3) };
+      };
+      const SHOW_K = 0.42;   // 제자리 크기가 이보다 작으면 입력창을 피할 자리가 없음
+      // 붙을 자리 = 제자리. 창이 좁아 제자리 크기가 SHOW_K보다 작으면(예전엔 숨김) 보일 수 있는 가장 작은 크기로 오른쪽 아래 구석.
+      // 매 프레임 다시 계산하므로 창 크기가 바뀌면 붙어 있는 캐릭터의 크기·위치도 따라 바뀜
+      const dockTarget = (home) => (home.k >= SHOW_K ? home : { k: SHOW_K, x: innerWidth - 4 - (W + visW) / 2 * SHOW_K + fleeX, y: innerHeight - H * SHOW_K });
+      const dockPose = (home, now) => {
+        if (drag.on) return { k: free.k, x: drag.x, y: drag.y };
+        const a = free.anim;
+        if (a) {
+          const p = Math.min(1, (now - a.t0) / a.ms), to = a.snap ? dockTarget(home) : a.to;
+          const e = a.snap ? easeBack(p) : easeOut(p), ek = easeOut(p);
+          const pose = { k: a.from.k + (to.k - a.from.k) * ek, x: a.from.x + (to.x - a.from.x) * e, y: a.from.y + (to.y - a.from.y) * e };
+          if (p >= 1) {
+            free.anim = null;
+            if (a.snap) { free.on = false; saveFree(); }
+            else { Object.assign(free, { on: true, x: to.x, y: to.y, k: to.k }); saveFree(); }
+          }
+          return pose;
+        }
+        if (!free.on) return dockTarget(home);
+        // 창 크기 비율 자리, 크기는 지금 창에 들어가는 최대치까지만
+        if (!isFinite(free.fx) || !isFinite(free.fy)) freeToRatio();
+        const fk = Math.max(SHOW_K, Math.min(free.k, Math.min(1.25, (innerHeight * 0.45) / visH)));   // 하한: 이보다 작으면 숨겨짐
+        const p = keepIn({ k: fk, x: free.fx * innerWidth - W * fk / 2, y: free.fy * innerHeight - H * fk });
+        return { k: p.k, x: p.x + fleeX, y: p.y };
+      };
+      // 손을 놓을 때: 속도만큼 조금만 미끄러짐(GLIDE). 멈출 자리가 제자리 근처면 자석으로 붙음.
+      const GLIDE = 0.066;   // 놓을 때 속도 × 이 시간(초)만큼 미끄러짐
+      const release = (vx, vy) => {
+        const k = free.k, from = { k, x: drag.x, y: drag.y }, p = { k, x: from.x + vx * GLIDE, y: from.y + vy * GLIDE };
+        const home = dockTarget(homePose());
+        const mid = (q, kk) => [q.x + W * kk / 2, q.y + H * kk * 0.5];
+        const [px, py] = mid(p, k);
+        const snap = Math.hypot(px - mid(home, home.k)[0], py - mid(home, home.k)[1]) < Math.max(140, visW * k * 0.7);
+        if (Math.hypot(vx, vy) > 2600) flashExp("dizzy", 1500);   // 세게 던지면 빙글빙글
+        free.on = true;
+        if (snap) { free.anim = { t0: performance.now(), ms: 650, from, to: null, snap: true }; return; }
+        const to = keepIn(p);   // 미끄러진 자리 (화면 밖으로 나간 부분은 살짝 당겨 들임)
+        if (to.x !== from.x || to.y !== from.y) free.anim = { t0: performance.now(), ms: 300, from, to, snap: false };
+        else { free.anim = null; Object.assign(free, { x: from.x, y: from.y, k }); saveFree(); }
+      };
       let lastPlaceKey = "";
       let lastClip = "";
+      let lastMask = "";
       const place = () => {
         const now = performance.now();
         const home = homePose();
-        let { k, x, y } = home;
+        const dock = dockPose(home, now);
+        let { k, x, y } = dock;
         let introOn = intro.phase !== "done", vo = 0;
         if (introOn && !intro.begun) {   // 호스트 화면(입력 카드)이 뜨고 잠잠해진 뒤에 등장: 창이 막 떠서 메인 스레드가 바쁜 구간의 끊김을 안 보이게 (최대 8초 대기)
           if (home.card && !intro.cardAt) intro.cardAt = now;
@@ -263,16 +333,18 @@
           } else {
             const p = ease((now - intro.moveStart) / 900);
             vo = 1 - p;
-            k = intro.from.k + (home.k - intro.from.k) * p; x = intro.from.x + (home.x - intro.from.x) * p; y = intro.from.y + (home.y - intro.from.y) * p;
+            k = intro.from.k + (dock.k - intro.from.k) * p; x = intro.from.x + (dock.x - intro.from.x) * p; y = intro.from.y + (dock.y - intro.from.y) * p;
             if (p >= 1) { intro.phase = "done"; introOn = false; setRes(1); veil.remove(); bubble.style.left = ""; bubble.style.fontSize = ""; bubble.style.padding = ""; }
           }
           veil.style.opacity = vo; veil.style.pointerEvents = intro.phase === "center" ? "auto" : "none";
           canvas.style.opacity = intro.phase === "center" ? ease((now - intro.start) / 300) : "";   // 아바타는 흐린 배경 위에서 서서히 등장
         }
-        const show = introOn || k >= 0.42;
+        const show = introOn || k >= SHOW_K;
         canvas.style.display = bubble.style.display = show ? "block" : "none";
         if (!show) return;
         curK = k;
+        shown.k = k; shown.x = x; shown.y = y;
+        const loose = dock !== home;   // 자유 위치: 말풍선 꼬리가 머리 위에 오게
         // 승인·질문 카드가 입력 영역에 떠 있으면 캐릭터에서 카드 모양(둥근 모서리 포함)만 잘라 낸다.
         // 캐릭터는 계속 위(z=30)에 두므로 테마를 끈 상태의 불투명한 입력 영역 배경에도 몸이 가려지지 않는다.
         // (placeKey 비교보다 먼저: 입력창 위치가 그대로여도 카드가 뜨고 사라지거나 테마 전환으로 반지름이 바뀌면 갱신)
@@ -291,11 +363,16 @@
         }
         if (clip !== lastClip) { canvas.style.clipPath = clip; lastClip = clip; }
         // 배치에 쓰는 값이 그대로면 건너뜀: 매 프레임 side 클래스를 뗐다 붙이며 레이아웃을 3번씩 강제하던 것 방지
+        // 허리 아래가 잘린 그림이라 화면 아래에서 띄우면 띄운 만큼 아래쪽을 흐리게 (꼬마 모습은 발까지 그려져 안 흐림)
+        const lift = innerHeight - (y + H * k);
+        const fade = Math.round(Math.max(0, Math.min(lift, H * k * 0.18)) * (1 - Math.min(1, Math.max(0, bodyW))));
         const r0 = home.r;
         const placeKey = introOn ? "" : [k, x, y, innerWidth, innerHeight, fleeX, Math.round(bodyW * 40), r0 && r0.left, r0 && r0.right, r0 && r0.top, r0 && r0.bottom,
-          bubble.textContent, bubble.className.replace(/\bside\b/g, "").trim()].join("|");
+          bubble.textContent, bubble.className.replace(/\bside\b/g, "").trim(), fade, loose].join("|");
         if (placeKey && placeKey === lastPlaceKey) return;
         lastPlaceKey = placeKey;
+        const mask = fade > 0 ? `linear-gradient(to bottom, #000 calc(100% - ${fade}px), transparent)` : "";
+        if (mask !== lastMask) { canvas.style.maskImage = canvas.style.webkitMaskImage = mask; lastMask = mask; }
         canvas.style.width = W * k + "px"; canvas.style.height = H * k + "px";
         if (fleeX !== 0) bubble.style.display = "none";
         canvas.style.left = x + "px"; canvas.style.top = y + "px";
@@ -308,7 +385,7 @@
           return;
         }
         const card = home.card;
-        bubble.style.right = "10px";
+        bubble.style.right = loose ? Math.max(10, innerWidth - (x + W * k / 2 + 55)) + "px" : "10px";   // 꼬리(말풍선 오른쪽 55px)를 머리 가운데에
         bubble.style.maxWidth = Math.max(150, visW * k * 1.1) + "px";
         bubble.style.top = Math.max(8, headTop - bubble.offsetHeight - 10) + "px";
         if (card && home.r) {
@@ -553,15 +630,25 @@
             // 떨림은 너무 빨라 가슴 물리가 따라오지 못하므로, 0.2초 안팎으로 몸을 위아래로 툭툭 쳐서 가슴이 그 박자에 출렁이게 함 (잦아들면 같이 약해짐)
             if (now > shiverBobAt) { bobKick((shiverBobSign = -shiverBobSign) * 40 * Math.pow(1 - se / 5, 1.5)); shiverBobAt = now + 170 + Math.random() * 90; }
           }
-          if (fleeX > 0 && !walk.phase) bodyZ += Math.sin(T * 16) * 8;   // 도망가며 종종걸음
-          // 산책: 걸어가는 쪽(왼쪽)으로 몸을 돌리고 통통 걸음
-          walk.face += ((walk.phase === "out" || walk.phase === "in" ? 1 : 0) - walk.face) * Math.min(1, dt * 5);
-          if (walk.face > 0.01) {
+          if (fleeX !== 0 && !walk.phase) bodyZ += Math.sin(T * 16) * 8;   // 도망가며 종종걸음
+          // 산책: 걸어가는 쪽으로 몸을 돌리고 통통 걸음 (walk.face: -1 = 왼쪽을 봄, 1 = 오른쪽을 봄). 돌아올 땐 반대쪽을 봄
+          const faceTo = walk.phase === "out" ? walk.dir : walk.phase === "in" ? -walk.dir : 0;
+          walk.face += (faceTo - walk.face) * Math.min(1, dt * 5);
+          const wa = Math.abs(walk.face);
+          if (wa > 0.01) {
             const ph = T * Math.PI * 2 * 1.8, wf = walk.face;
-            yaw = yaw * (1 - wf) - 22 * wf; pitch -= 2 * wf; roll += Math.sin(ph) * 2.5 * wf;
-            bodyX -= 6 * wf; bodyY += Math.abs(Math.sin(ph)) * 6 * wf; bodyZ += Math.sin(ph) * 4 * wf;
+            yaw = yaw * (1 - wa) + 22 * wf; pitch -= 2 * wa; roll += Math.sin(ph) * 2.5 * wa;
+            bodyX += 6 * wf; bodyY += Math.abs(Math.sin(ph)) * 6 * wa; bodyZ += Math.sin(ph) * 4 * wa;
           }
           if (walkCheck) walkCheck(now);
+          // 끌기·던지기: 움직이는 반대쪽으로 몸이 쏠리고(관성) 머리카락·치마·리본은 물리로 따라 흔들림. 손을 멈추거나 놓으면 잦아듦
+          const lastSample = drag.samples.length ? drag.samples[drag.samples.length - 1][0] : 0;
+          if (!drag.on || now - lastSample > 60) { const f = Math.max(0, 1 - dt * 5); carry.vx *= f; carry.vy *= f; }
+          const cvx = clamp(carry.vx / 1600, -1, 1), cvy = clamp(carry.vy / 1600, -1, 1);
+          if (Math.abs(cvx) + Math.abs(cvy) > 0.002) {
+            bodyX -= cvx * 16; bodyZ -= cvx * 14; roll -= cvx * 12; yaw += cvx * 8;
+            bodyY -= cvy * 12; pitch += cvy * 10;
+          }
           // 삐짐: 0.35초에 턱을 들고 고개를 홱 돌리고, 끝나기 1.2초 전부터 천천히 돌아옴
           const sk = now < sulkUntil ? Math.min(sstep((now - sulkStart) / 350), sstep((sulkUntil - now) / 1200)) : 0;
           let peek = 0;   // 몰래 보기 정도 (0 = 외면, 1 = 사용자 쪽을 봄)
@@ -858,8 +945,12 @@
           setTimeout(() => speak("chest_calm", 2800), 3000);
         }
       };
-      const flee = () => {   // 오른쪽 밖으로 사라졌다가 10초 뒤 돌아옴
-        const off = (W + 80) * curK, go = (from, to, ms, done) => {
+      // 가까운 쪽 화면 끝(-1 = 왼쪽, 1 = 오른쪽)과 그쪽으로 완전히 나가는 거리. 높이는 그대로 두고 좌우로만 움직임.
+      const nearSide = () => { const a = area(), c = shown.x - fleeX + W * curK / 2; return c - a.l < a.r - c ? -1 : 1; };
+      const outDistance = (dir) => { const a = area(), x = shown.x - fleeX; return dir < 0 ? -(x + W * curK - a.l + 20) : a.r - x + 20; };
+      const flee = () => {   // 가까운 쪽 화면 밖으로 사라졌다가 10초 뒤 같은 쪽에서 돌아옴
+        if (drag.pending || drag.on) return;   // 예약된 사이 집었으면 취소
+        const off = outDistance(nearSide()), go = (from, to, ms, done) => {
           const t0 = performance.now();
           const step = () => {
             const p = Math.min(1, (performance.now() - t0) / ms), e = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
@@ -869,39 +960,46 @@
           requestAnimationFrame(step);
         };
         hush();
-        go(0.01, off, 700, () => setTimeout(() => go(off, 0, 1100, () => { fleeX = 0; setTimeout(() => speak("lower_after", 4000), 400); }), 10000));
+        go(Math.sign(off) * 0.01, off, 700, () => setTimeout(() => go(off, 0, 1100, () => { fleeX = 0; setTimeout(() => speak("lower_after", 4000), 400); }), 10000));
       };
       // ---------- 산책 ----------
       const WALK_SPEED = 320;   // 걷는 속도 (px/초)
       const walkEase = (p) => { const a = 0.12, m = 2 * a * (1 - a); return p < a ? p * p / m : p > 1 - a ? 1 - (1 - p) * (1 - p) / m : (p - a / 2) / (1 - a); };   // 출발·도착만 부드럽게, 중간은 일정한 속도
+      // 산책의 예약 타이머와 걷기 애니메이션은 walk.timers·walk.slideId로 묶어, 집어 들면 한 번에 멈춘다
+      const walkLater = (fn, ms) => { const id = setTimeout(() => { walk.timers = walk.timers.filter((t) => t !== id); fn(); }, ms); walk.timers.push(id); return id; };
       const slide = (from, to, done) => {
-        const t0 = performance.now(), ms = Math.abs(to - from) / WALK_SPEED * 1000;
+        const t0 = performance.now(), ms = Math.abs(to - from) / WALK_SPEED * 1000, id = ++walk.slideId;
         const step = () => {
+          if (id !== walk.slideId) return;   // 멈춤
           const p = Math.min(1, (performance.now() - t0) / ms);
           fleeX = from + (to - from) * walkEase(p);
           if (p < 1) requestAnimationFrame(step); else done();
         };
         requestAnimationFrame(step);
       };
-      const walkBack = () => {   // 오른쪽 화면 밖에서 제자리까지 걸어 들어옴
+      const cancelWalk = () => {   // 출발 전(말하는 중)에 집어 들면 산책을 취소. 출발한 뒤에는 제자리에 올 때까지 집을 수 없음
+        if (walk.phase !== "ready") return;
+        for (const t of walk.timers) clearTimeout(t);
+        walk.timers = []; walk.slideId++; walk.phase = "";
+      };
+      const walkBack = () => {   // 나갔던 쪽 화면 밖에서 원래 자리까지 걸어 들어옴
         if (walk.phase !== "away") return;
-        clearTimeout(walk.timer);
-        walk.phase = "in";
-        const homeLeft = canvas.getBoundingClientRect().left - fleeX;
-        slide(innerWidth - homeLeft + 20, 0, () => {
+        for (const t of walk.timers) clearTimeout(t);
+        walk.timers = []; walk.phase = "in";
+        slide(walk.out, 0, () => {
           fleeX = 0; walk.phase = "";
-          setTimeout(() => { if (!walk.phase) speak("walk_back", 3500); }, 450);   // 정면으로 돌아선 뒤 인사
+          walkLater(() => { if (!walk.phase) speak("walk_back", 3500); }, 450);   // 정면으로 돌아선 뒤 인사
         });
       };
-      const startWalk = () => {   // 말하고 → 왼쪽으로 돌아서 → 화면 밖까지 걸어감 → 8~14초 뒤 돌아옴
-        walk.phase = "ready";
+      const startWalk = () => {   // 말하고 → 가까운 쪽으로 돌아서 → 화면 밖까지 걸어감(높이 그대로) → 8~14초 뒤 같은 쪽으로 돌아옴
+        walk.phase = "ready"; walk.dir = nearSide();
         speak("walk_out", 2200);
-        setTimeout(() => {
+        walkLater(() => {
           walk.phase = "out"; hush();
-          setTimeout(() => slide(0, -(canvas.getBoundingClientRect().right + 20), () => {
+          walkLater(() => { walk.out = outDistance(walk.dir); slide(0, walk.out, () => {
             walk.phase = "away";
-            walk.timer = setTimeout(walkBack, 8000 + Math.random() * 6000);
-          }), 700);   // 꼬마 모습으로 바뀐 뒤 출발
+            walkLater(walkBack, 8000 + Math.random() * 6000);
+          }); }, 700);   // 꼬마 모습으로 바뀐 뒤 출발
         }, 2300);
       };
       walkCheck = (now) => {
@@ -909,12 +1007,13 @@
         if (walk.phase || now < walk.next) return;
         walk.next = now + 30000;   // 지금은 갈 때가 아니면 30초 뒤 다시 확인
         if (intro.phase !== "done" || mood !== "idle" || running || waitingKind || now < sulkUntil || now < inputLockedUntil || fleeX !== 0) return;
+        if (drag.pending || drag.on || free.anim) return;   // 누르거나 들고 있을 때·움직이는 중엔 산책 안 함
         if (bubble.classList.contains("show") || now - walk.lastTouch < 60000 || now - lastSayAt < 15000 || document.hidden) return;
         walk.next = now + (240 + Math.random() * 240) * 1000;   // 다음 산책은 4~8분 뒤
         startWalk();
       };
       const onLower = (now) => {
-        if (fleeX > 0 || now < low.cooldownUntil || now - low.last < 180) return;
+        if (fleeX !== 0 || now < low.cooldownUntil || now - low.last < 180) return;
         if (now - low.last > 8000) low.count = 0;
         low.last = now; low.count++;
         if (low.count <= 2) speak("lower1", 4000);
@@ -1042,28 +1141,86 @@
         speak("body");
       };
       // 캔버스는 클릭을 통과시키므로, 문서 단계에서 캐릭터 위 클릭만 가로챔 (투명한 곳은 뒤 화면으로 그대로)
+      // 짧게 눌렀다 떼면 터치, 누른 채 6px 넘게 움직이면 집어 들어 옮김
+      // 머리에서 아래로 쓸어내리면 끌기 대신 냄비(빠르게)·세숫대야(천천히)
       const POT_MS = 130;   // 머리에서 이 시간(ms) 안에 55px 넘게 쓸어내리면 냄비, 아니면 세숫대야
       let swallowClick = false, strokeFrom = null;   // strokeFrom: 머리를 누른 채 쓸어내리는지 지켜보는 중
+      const pt = (e) => [e.clientX, e.clientY];
+      // 커서가 몸 전체 영역(캔버스 양옆 빈 곳·머리 위 여백 제외) 안에 있는지 (휠 크기 조절에 씀)
+      const overBody = (cx, cy) => {
+        if (canvas.style.display === "none" || fleeX !== 0) return false;
+        const c = canvas.getBoundingClientRect(), r = bodyRect(c.left, c.top, curK);
+        return cx >= r.l && cx <= r.r && cy >= r.t && cy <= r.b;
+      };
+      const walking = () => walk.phase === "out" || walk.phase === "away" || walk.phase === "in";   // 출발한 뒤 ~ 제자리 도착 전
       document.addEventListener("pointerdown", (e) => {
         swallowClick = false; strokeFrom = null;
-        if (e.button !== 0) return;
+        if (e.button !== 0 || walking()) return;   // 산책을 떠난 뒤에는 돌아올 때까지 클릭을 받지 않음 (뒤 화면으로 통과)
         const h = hitAt(e.clientX, e.clientY);
         if (!h) return;
         e.preventDefault(); e.stopPropagation(); swallowClick = true;
-        if (performance.now() >= inputLockedUntil && touchRegion(h[0], h[1], h[2]) === "head") { strokeFrom = { x: e.clientX, y: e.clientY, t: performance.now(), h }; return; }
-        onTouch(h[0], h[1], h[2]);
+        const head = performance.now() >= inputLockedUntil && touchRegion(h[0], h[1], h[2]) === "head";
+        if (head) strokeFrom = { x: e.clientX, y: e.clientY, t: performance.now(), h };
+        if (intro.phase !== "done" || fleeX !== 0) return head ? undefined : onTouch(h[0], h[1], h[2]);   // 시작 연출·도망 중엔 끌기 없음 (머리는 떼는 순간 터치)
+        const [px, py] = pt(e);
+        drag.pending = { id: e.pointerId, sx: px, sy: py, h, ox: px - shown.x, oy: py - shown.y };
       }, true);
-      document.addEventListener("pointermove", (e) => {   // 머리에서 아래로 쓸어내림: 빠르면 냄비가 떨어지고, 천천히면 세숫대야를 씌움
-        if (!strokeFrom) return;
-        const dy = e.clientY - strokeFrom.y, dx = Math.abs(e.clientX - strokeFrom.x);
-        const el = performance.now() - strokeFrom.t, st = strokeFrom;
-        if (el < POT_MS) { if (dy > 55 && dy > dx * 1.2) { strokeFrom = null; potHit(st.x, st.y); } }   // 확실히 빠르게 쓸어야 냄비
-        else if (dy > 40 && dy > dx * 0.8) { strokeFrom = null; putBasin(); }   // 그보다 느리면 세숫대야 (짧고 조금 비스듬해도 인정)
+      // 빠르면 냄비, 느리면 세숫대야 (확실히 빠르게 쓸어야 냄비, 짧고 조금 비스듬해도 세숫대야)
+      const strokeKind = (st, e) => {
+        const dy = e.clientY - st.y, dx = Math.abs(e.clientX - st.x);
+        if (performance.now() - st.t < POT_MS) return dy > 55 && dy > dx * 1.2 ? "pot" : null;
+        return dy > 40 && dy > dx * 0.8 ? "basin" : null;
+      };
+      document.addEventListener("pointermove", (e) => {
+        if (strokeFrom) {
+          const st = strokeFrom, kind = strokeKind(st, e);
+          if (kind) { strokeFrom = null; drag.pending = null; return kind === "pot" ? potHit(st.x, st.y) : putBasin(); }
+          const dy = e.clientY - st.y, dx = Math.abs(e.clientX - st.x);
+          // 아직 6px 안 움직였거나 아래로 쓸어내리는 중일 수 있으면 끌기 시작을 미룸, 끌 수 없는 때(시작 연출·도망 중)는 떼는 순간 터치
+          if (!drag.pending || Math.hypot(dx, dy) < 6 || (dy > 0 && dy > dx * 0.8)) return;
+          strokeFrom = null;
+        }
+        const p = drag.pending;
+        if (!p || e.pointerId !== p.id) return;
+        // 손을 뗀 이벤트(pointerup)를 놓쳤으면 버튼 상태로 알아채고 그 자리에서 놓음
+        if (e.buttons === 0) return endDrag(e, false);
+        const [px, py] = pt(e), now = performance.now();
+        if (!drag.on) {
+          if (Math.hypot(px - p.sx, py - p.sy) < 6) return;
+          cancelWalk();   // 산책 가려고 말하던 중이면 취소
+          drag.on = true; drag.samples = []; free.anim = null; free.k = shown.k;
+          try { document.documentElement.setPointerCapture(e.pointerId); } catch {}
+          document.documentElement.classList.add("dsc-grabbing");
+          until.sweat = Infinity;   // 들고 있는 동안 식은땀
+          walk.lastTouch = now;
+        }
+        drag.x = px - p.ox; drag.y = py - p.oy;
+        drag.samples.push([now, px, py]);
+        while (drag.samples.length > 2 && now - drag.samples[0][0] > 100) drag.samples.shift();
+        const [t0, x0, y0] = drag.samples[0], dt = Math.max(16, now - t0) / 1000;
+        carry.vx += ((px - x0) / dt - carry.vx) * 0.5; carry.vy += ((py - y0) / dt - carry.vy) * 0.5;
+        e.preventDefault();
       }, true);
-      document.addEventListener("pointerup", () => {   // 쓸어내리지 않고 떼면 원래 머리 터치 반응
-        if (!strokeFrom) return;
-        const st = strokeFrom; strokeFrom = null; onTouch(st.h[0], st.h[1], st.h[2]);
+      const endDrag = (e, cancel) => {
+        const p = drag.pending;
+        if (!p || e.pointerId !== p.id) return;
+        drag.pending = null; strokeFrom = null;
+        if (!drag.on) { if (!cancel) onTouch(p.h[0], p.h[1], p.h[2]); return; }   // 끌지 않고 뗌 = 터치
+        drag.on = false;
+        try { document.documentElement.releasePointerCapture(e.pointerId); } catch {}
+        document.documentElement.classList.remove("dsc-grabbing");
+        until.sweat = performance.now() + 400;
+        const moving = performance.now() - drag.samples[drag.samples.length - 1][0] < 80;   // 멈췄다가 놓으면 던지지 않음
+        const vx = moving ? carry.vx : 0, vy = moving ? carry.vy : 0;
+        release(vx, vy);
+      };
+      document.addEventListener("pointerup", (e) => {
+        const st = strokeFrom; strokeFrom = null;
+        if (drag.pending) return endDrag(e, false);
+        if (st) onTouch(st.h[0], st.h[1], st.h[2]);   // 쓸어내리지 않고 떼면 원래 머리 터치 반응
       }, true);
+      addEventListener("blur", () => { if (drag.pending) endDrag({ pointerId: drag.pending.id }, !drag.on); });   // 창 포커스를 잃으면 끄기를 끝냄
+      document.addEventListener("pointercancel", (e) => endDrag(e, true), true);
       for (const type of ["pointerup", "mousedown", "mouseup", "click", "dblclick"]) {
         document.addEventListener(type, (e) => {
           if (!swallowClick) return;
@@ -1074,9 +1231,21 @@
       let hoverCheck = 0;
       document.addEventListener("mousemove", (e) => {   // 캐릭터 위에서는 손가락 커서
         const now = performance.now(); if (now - hoverCheck < 80) return; hoverCheck = now;
-        const over = !!hitAt(e.clientX, e.clientY);
+        const over = !walking() && !!hitAt(e.clientX, e.clientY);
         document.documentElement.classList.toggle("dsc-hover", over);
       }, { passive: true });
+      // 휠로 크기 조절: 자유 위치일 때 몸 위에서 올리면 커지고 내리면 작아짐 (몸 아래 가운데를 기준으로). 0.42배~그 창에 들어가는 최대치.
+      // 제자리에 붙어 있으면 크기는 자동이라 휠은 대화 스크롤 그대로. 들고 있을 때·움직이는 중·산책·도망 중엔 무시
+      document.addEventListener("wheel", (e) => {
+        if (intro.phase !== "done" || !free.on || !overBody(e.clientX, e.clientY)) return;
+        e.preventDefault(); e.stopPropagation();   // 캐릭터 위에서는 대화 스크롤 대신 크기 조절
+        if (drag.on || free.anim || walk.phase || fleeX !== 0) return;
+        const kMin = SHOW_K, kMax = Math.min(1.25, (innerHeight * 0.45) / visH);
+        const k0 = Math.min(free.k, kMax), k = Math.min(kMax, Math.max(kMin, k0 * Math.exp(-e.deltaY * 0.0012)));
+        if (k === k0) return;
+        free.k = k;   // 비율 자리(몸 가운데·아래 끝)라 크기만 바꿔도 아래 가운데 기준
+        saveFree(false);
+      }, { capture: true, passive: false });
 
       // ---------- Harness 상태 → 반응 ----------
       listeners.tool = (text) => {
