@@ -20,6 +20,9 @@ export const Config = z.object({
   shoesOff: z.boolean().default(false).volatile(),
   tailHide: z.boolean().default(false).volatile(),
   bodyType: z.union([z.const('default'), z.const('type1'), z.const('type2')]).default('default').volatile(),
+  // 절전: 입력이 없으면 캐릭터가 화면 밖으로 나가 렌더링을 멈춤
+  idleSleep: z.boolean().default(true).volatile(),
+  idleSleepMinutes: z.number().default(1).volatile(),
 })
 export const ASSET_PATH = '/deepseek-harness-kr/assets'
 const assets = fileURLToPath(new URL('../assets/', import.meta.url))
