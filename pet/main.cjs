@@ -1,6 +1,6 @@
 // 바깥 펫 창 (DSH의 Electron 실행 파일로 도는 작은 앱)
 // - 투명·테두리 없음·항상 위 창 하나에 assets/dsc.js 를 펫 모드로 띄운다. 캐릭터 위에서만 클릭을 받고 나머지는 뒤 화면으로 통과.
-// - 플러그인 호스트와 이름 있는 파이프로 JSON 한 줄씩 주고받는다. 파이프가 끊기면(DSH 종료) 함께 끝난다.
+// - 플러그인 호스트와 JSON 한 줄씩 주고받는다 (Windows 이름 있는 파이프 · macOS unix 소켓, 둘 다 net.connect(경로)). 연결이 끊기면(DSH 종료) 함께 끝난다.
 const { app, BrowserWindow, Menu, ipcMain, net, protocol, screen } = require('electron')
 const path = require('node:path')
 const { connect } = require('node:net')
@@ -10,8 +10,15 @@ const arg = (name) => { const hit = process.argv.find((a) => a.startsWith(`--${n
 const PIPE = arg('dsc-pipe'), ASSETS = arg('dsc-assets'), APP = __dirname
 const WIN_W = 440, WIN_H = 540   // 캐릭터(최대 375px)와 머리 위 말풍선이 들어가는 크기
 
+const MAC = process.platform === 'darwin'
 if (!PIPE || !ASSETS) app.exit(1)
 app.setName('DeepSeekChan Pet')
+if (MAC) {
+  app.setActivationPolicy('accessory')                 // Dock·앱 전환기에 안 나타남 (번들 Info.plist 의 LSUIElement 와 겹쳐 둠)
+  app.commandLine.appendSwitch('use-mock-keychain')    // 사본(ad-hoc 서명)이 DSH 의 키체인 항목을 건드려 암호 창이 뜨는 일 방지
+  // 프로필(캐시·로컬 저장소)은 DSH 와 따로 둠
+  if (!app.commandLine.hasSwitch('user-data-dir')) app.setPath('userData', path.join(app.getPath('appData'), 'deepseek-harness-kr', 'pet-profile'))
+}
 protocol.registerSchemesAsPrivileged([{ scheme: 'dscpet', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }])
 
 let win = null, socket = null, buffer = ''
@@ -62,8 +69,14 @@ app.whenReady().then(() => {
     width: WIN_W, height: WIN_H, show: false, frame: false, transparent: true, backgroundColor: '#00000000',
     resizable: false, maximizable: false, minimizable: false, fullscreenable: false, skipTaskbar: true, hasShadow: false, alwaysOnTop: true,
     title: 'DeepSeekChan',
+    // macOS: 기본 창은 메뉴 막대 아래로 위치가 눌려 캐릭터와 창이 어긋남(enableLargerThanScreen 으로 해제), 포커스를 가져가지 않고 첫 클릭도 바로 받음
+    ...(MAC ? { enableLargerThanScreen: true, focusable: false, acceptFirstMouse: true } : {}),
     webPreferences: { preload: path.join(APP, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false },
   })
+  if (MAC) {   // 전체 화면 앱·모든 Spaces 위. skipTransformProcessType: LSUIElement 앱이라 프로세스 유형 전환(Dock 깜빡임) 불필요
+    win.setAlwaysOnTop(true, 'screen-saver')
+    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true })
+  }
   win.setIgnoreMouseEvents(true, { forward: true })   // 처음엔 클릭 통과 (accepting = false)
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   win.webContents.on('will-navigate', (event) => event.preventDefault())
