@@ -188,7 +188,8 @@
       const setMood = (m, ms = 0) => { mood = m; moodUntil = ms ? performance.now() + ms : 0; };
       const pose = { lean: 0, headZ: 0, headY: 0, bodyY: 0, swayAmp: 0 };   // 부드럽게 따라가는 자세 값
       let shiverStarted = -1e9, touchLeanUntil = 0, touchLean = 0;
-      let shiverBobAt = 0, shiverBobSign = 1;   // 떨릴 때 가슴을 출렁이게 하는 위아래 툭툭
+      let shiverBobAt = 0, shiverBobSign = 1;
+      let happyMouthUntil = 0, happyMouth = 0;   // 가슴 터치 2번째부터 "헤~" 입   // 떨릴 때 가슴을 출렁이게 하는 위아래 툭툭
       // 머리를 계속 만지면 삐짐: 턱을 들고 고개를 홱 돌림. 삐진 동안 몇 번 사용자를 몰래 보다가 빠르게 다시 외면
       let stareUntil = 0, stareW = 0;   // 정면을 똑바로 보는 동안 (삐짐이 풀리며 한마디)
       let sulkStart = -1e9, sulkUntil = 0, sulkDir = 1, sulkPeeks = [], sulkYaw = 0, sulkRoll = 0;
@@ -576,13 +577,14 @@
           core.setParameterValueById("ParamBreath", 0.5 + 0.5 * Math.sin(T * 2 * Math.PI / 3.6));
 
           // ---- 눈썹 (귀가 따라 움직임) ----
-          const brow = browVal + noise(T * 0.5, 7) * 0.12 + (mood === "wait" ? 0.25 : mood === "sad" ? -0.3 : 0);
+          const brow = browVal + noise(T * 0.5, 7) * 0.12 + (mood === "wait" ? 0.25 : mood === "sad" ? -0.3 : 0) - 0.15 * happyMouth;
+          if (happyMouth > 0.01) core.addParameterValueById("BrowInnerUp", 0.55 * happyMouth);   // 곤란한 눈썹 (안쪽 끝이 올라감)
           core.addParameterValueById("ParamBrowLY", clamp(brow, -1, 1));
           core.addParameterValueById("ParamBrowRY", clamp(brow + noise(T * 0.6, 8) * 0.06, -1, 1));
           if (browVal > 0.15) core.addParameterValueById("BrowInnerUp", Math.min(1, browVal * 0.6));
 
           // ---- 입: 모음 모양 + 늘 살짝 웃는 입꼬리 ----
-          const openNow = clamp(mouthOpen + mouthAdd, 0, 1);
+          const openNow = clamp(mouthOpen + mouthAdd + 0.14 * happyMouth, 0, 1);   // 살짝 벌린 입
           if (openNow > 0.01) {
             core.setParameterValueById("ParamMouthOpenY", openNow * 0.9);
             core.addParameterValueById("JawOpen", openNow * 0.45);
@@ -590,10 +592,11 @@
             for (const k of VOW) if (vowel[k] > 0.01) core.addParameterValueById("Param" + k, Math.min(1, vowel[k]) * (VOW_EYE_SAFE[k] || 1));
             if (mouthAdd > 0.01) core.addParameterValueById("ParamA", mouthAdd * 0.8);
           }
-          const baseSmile = (mood === "sad" ? 0 : mood === "wait" ? 0.15 : 0.35) * (1 - sk);
+          happyMouth += ((now < happyMouthUntil ? 1 : 0) - happyMouth) * Math.min(1, dt * 5);
+          const baseSmile = (mood === "sad" ? 0 : mood === "wait" ? 0.15 : 0.35) * (1 - sk) + 0.2 * happyMouth;   // 부끄럽지만 좋아서 입꼬리가 조금 올라감 (곤란함이 섞여 크게는 안 웃음)
           if (sk > 0.01) for (const [id, eased] of [["CheeckPuff", 0.5], ["Mouthpucker", 0.3], ["Angry", 0.5], ["Angry2", 0.5]]) core.addParameterValueById(id, sk * (1 - eased * peek));   // 볼 부풀리기·입 삐죽·찡그린 눈썹 (몰래 볼 땐 조금 풀림)
           core.addParameterValueById("ParamMouthForm", clamp(baseSmile + smile * 0.4, -1, 1));
-          core.addParameterValueById("MouthSmile_L", clamp(baseSmile + smile * 0.5, 0, 1));
+          core.addParameterValueById("MouthSmile_L", clamp(baseSmile + smile * 0.5 + 0.3 * happyMouth, 0, 1));   // 한쪽만 더 올라간 어색한 웃음
           core.addParameterValueById("MouthSmile_R", clamp(baseSmile + smile * 0.5 + noise(T * 0.3, 9) * 0.05, 0, 1));
           const eSmile = clamp((mood === "sad" ? 0 : 0.12) + smile * 0.35 + eyeSmileAdd, 0, 1);
           if (eSmile > 0.01) core.addParameterValueById("EyeSmile", eSmile);
@@ -686,9 +689,9 @@
         arm: ["[홍조] 손 잡고 싶은 거예요?", "[홍조] 팔은 왜요~?"],
         leg: ["[식은땀, 홍조] 어, 어디 만지는 거예요!", "[식은땀, 홍조] 다리는 안 돼요…!"],
         chest1: ["[홍조, 얄미운] 앗… 조금 부끄러워요.", "[홍조, 얄미운] 제 반응이 궁금한 거예요?"],
-        chest2: ["[홍조, 식은땀] 자꾸 그러면… 얼굴 빨개지잖아요!", "[홍조, 식은땀] 으으… 놀리지 말아요…"],
-        chest3: ["[홍조, ><] 너무 부끄러워요… 잠깐만요!"],
-        chest_calm: ["[홍조] 후우… 잠깐 진정할게요."],
+        chest2: ["[하트, 홍조] 자꾸 그러면… 얼굴 빨개지잖아요!", "[하트, 홍조] 으으… 놀리지 말아요…"],
+        chest3: ["[하트, 홍조] 너무 부끄러워요… 잠깐만요!"],
+        chest_calm: ["[하트, 홍조] 후우… 잠깐 진정할게요."],
         lower1: ["[홍조, 식은땀] 거, 거기는 안 돼요!", "[홍조, 식은땀] 치마는 만지면 안 돼요…"],
         lower2: ["[홍조, ><] 진짜 화낼 거예요!", "[홍조, ><] 으으… 그만해요…"],
         lower3: ["[><, 식은땀] 히익…!"],
@@ -825,13 +828,15 @@
         shy.last = now; shy.count++;
         if (shy.count <= 4) {
           if (now < touchLeanUntil || Math.random() < 0.16) touchLeanUntil = now + 3000;   // 가끔 앞으로 숙임, 숙인 동안 누르면 3초 연장
-          speak(shy.count <= 2 ? "chest1" : "chest2", 4000);
+          speak(shy.count <= 1 ? "chest1" : "chest2", 4000);
+          if (shy.count >= 2) happyMouthUntil = now + 4000;   // 2번째부터: 입꼬리 올리고 살짝 벌린 "헤~"
           if (shy.count >= 3) coverChest(2600);   // 3~4번째: 왼손으로 가슴을 가림
         } else {
           touchLeanUntil = 0; shy.count = 0;
           shy.cooldownUntil = inputLockedUntil = now + 6000;   // 진정할 때까지 터치 안 받음
           shiverStarted = now;
           speak("chest3", 3000);
+          happyMouthUntil = now + 6000;
           coverChest(6000);   // 마지막: 진정할 때까지 가린 채로
           setTimeout(() => speak("chest_calm", 2800), 3000);
         }
