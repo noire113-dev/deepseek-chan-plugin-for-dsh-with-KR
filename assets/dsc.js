@@ -168,6 +168,10 @@
       const setMood = (m, ms = 0) => { mood = m; moodUntil = ms ? performance.now() + ms : 0; };
       const pose = { lean: 0, headZ: 0, headY: 0, bodyY: 0, swayAmp: 0 };   // 부드럽게 따라가는 자세 값
       let shiverStarted = -1e9, touchLeanUntil = 0, touchLean = 0;
+      // 머리를 계속 만지면 삐짐: 턱을 들고 고개를 홱 돌림. 삐진 동안 몇 번 사용자를 몰래 보다가 빠르게 다시 외면
+      let sulkStart = -1e9, sulkUntil = 0, sulkDir = 1, sulkPeeks = [], sulkYaw = 0, sulkRoll = 0;
+      const SULK_CHIN = 10;                                        // 턱을 드는 정도 (AngleY, 위가 +)
+      const PEEK_RISE = 550, PEEK_HOLD = 450, PEEK_SNAP = 150;     // 몰래 보기: 천천히 돌아봄 → 잠깐 봄 → 홱 외면 (ms)
 
       // 위치: 오른쪽 아래 구석, 입력창을 가리지 않는 가장 큰 크기
       const visW = bw * s, visH = H * 0.95;
@@ -473,7 +477,7 @@
               }
             }
           }
-          if (!gest.name && mood === "idle" && now > nextIdleGesture) {   // 가만히 있을 때 가끔 몸짓
+          if (!gest.name && mood === "idle" && now > nextIdleGesture && now >= sulkUntil) {   // 가만히 있을 때 가끔 몸짓 (삐진 동안은 안 함)
             const r = Math.random();
             const pick = r < 0.3 ? "tilt" : r < 0.5 ? "sway" : r < 0.72 ? "lean" : r < 0.88 ? "nod" : "laugh";
             play(pick, pick === "lean" ? 2600 : pick === "sway" ? 2300 : pick === "laugh" ? 1500 : 1800);
@@ -487,6 +491,25 @@
             bodyZ -= tr * 3; roll += tr * 2;
           }
           if (fleeX > 0) bodyZ += Math.sin(T * 16) * 8;              // 도망가며 종종걸음
+          // 삐짐: 0.35초에 턱을 들고 고개를 홱 돌리고, 끝나기 1.2초 전부터 천천히 돌아옴
+          const sk = now < sulkUntil ? Math.min(sstep((now - sulkStart) / 350), sstep((sulkUntil - now) / 1200)) : 0;
+          let peek = 0;   // 몰래 보기 정도 (0 = 외면, 1 = 사용자 쪽을 봄)
+          if (sk > 0) {
+            const ts = now - sulkStart;
+            for (const p of sulkPeeks) {
+              const u = ts - p.at;
+              if (u < 0 || u > PEEK_RISE + PEEK_HOLD + PEEK_SNAP) continue;
+              if (u >= PEEK_RISE + PEEK_HOLD && !p.done) { p.done = true; if (p.flip) sulkDir = -sulkDir; }   // 다시 외면할 때 60% 확률로 반대쪽으로
+              peek = u < PEEK_RISE ? sstep(u / PEEK_RISE) : u < PEEK_RISE + PEEK_HOLD ? 1 : 1 - sstep((u - PEEK_RISE - PEEK_HOLD) / PEEK_SNAP);
+            }
+            const away = 1 - 0.75 * peek, k = Math.min(1, dt * 14);   // 고개는 빠르게 따라가서 방향을 바꿀 때 홱 돌아감
+            sulkYaw += (-24 * sulkDir * away - sulkYaw) * k;
+            sulkRoll += (-8 * sulkDir * away - sulkRoll) * k;
+            yaw = yaw * (1 - sk) + sulkYaw * sk; roll = roll * (1 - sk) + sulkRoll * sk;
+            pitch = pitch * (1 - sk) + SULK_CHIN * (1 - 0.6 * peek) * sk;
+            bodyX = bodyX * (1 - sk) + sulkYaw / 6 * sk; smile *= 1 - sk; eyeSmileAdd *= 1 - sk;
+          }
+          const sulkEye = sulkDir * (-0.45 + 0.85 * Math.min(1, peek * 1.8));   // 외면할 땐 눈도 피하고, 몰래 볼 땐 눈이 먼저 사용자 쪽으로
 
           yaw = clamp(yaw, -30, 30); pitch = clamp(pitch, -30, 30); roll = clamp(roll, -30, 30);
           for (const [id, v] of [["AngleX", yaw], ["AngleY", pitch], ["AngleZ", roll], ["ParamAngleX", yaw], ["ParamAngleY", pitch], ["ParamAngleZ", roll],
@@ -494,7 +517,7 @@
 
           // ---- 눈: 눈동자는 고개보다 먼저 (머리 기준 상대 위치) ----
           // 눈동자는 작게만 (크게 움직이면 흰자가 드러나 곁눈질처럼 보임)
-          core.addParameterValueById("ParamEyeBallX", clamp(((ex.x - hx.x) * 0.9 + hx.x * 0.2) * 0.6, -0.45, 0.45));
+          core.addParameterValueById("ParamEyeBallX", clamp(((ex.x - hx.x) * 0.9 + hx.x * 0.2) * 0.6, -0.45, 0.45) * (1 - sk) + sulkEye * sk);
           core.addParameterValueById("ParamEyeBallY", clamp(((ey.x - hy.x) * 0.9 + hy.x * 0.2) * 0.6, -0.3, 0.3));
           core.setParameterValueById("ParamBreath", 0.5 + 0.5 * Math.sin(T * 2 * Math.PI / 3.6));
 
@@ -513,7 +536,8 @@
             for (const k of VOW) if (vowel[k] > 0.01) core.addParameterValueById("Param" + k, Math.min(1, vowel[k]));
             if (mouthAdd > 0.01) core.addParameterValueById("ParamA", mouthAdd * 0.8);
           }
-          const baseSmile = mood === "sad" ? 0 : mood === "wait" ? 0.15 : 0.35;
+          const baseSmile = (mood === "sad" ? 0 : mood === "wait" ? 0.15 : 0.35) * (1 - sk);
+          if (sk > 0.01) for (const [id, eased] of [["CheeckPuff", 0.5], ["Mouthpucker", 0.3], ["Angry", 0.5], ["Angry2", 0.5]]) core.addParameterValueById(id, sk * (1 - eased * peek));   // 볼 부풀리기·입 삐죽·찡그린 눈썹 (몰래 볼 땐 조금 풀림)
           core.addParameterValueById("ParamMouthForm", clamp(baseSmile + smile * 0.4, -1, 1));
           core.addParameterValueById("MouthSmile_L", clamp(baseSmile + smile * 0.5, 0, 1));
           core.addParameterValueById("MouthSmile_R", clamp(baseSmile + smile * 0.5 + noise(T * 0.3, 9) * 0.05, 0, 1));
@@ -550,8 +574,9 @@
       // ---------- 터치 (데스크톱 펫과 같은 부위 판정) ----------
       // 대사: 펫 코드(lines.js)에 든 기본 대사 + 기본 대사가 없는 상황만 짧게 채움. [표정] 꼬리표로 표정 지정.
       const LINES = {
-        head: ["[홍조, ><] 에헤헤, 쓰다듬어 주는 거예요?", "[홍조, ><] 머리는… 조금 부끄러워요", "[홍조, ><] 헤헤♪", "[홍조, ><] 더 해 주세요!"],
-        head_many: ["[하트, 홍조] 헤헤, 오늘 기분 좋은가 봐요?", "[하트, 홍조] 이러다 머리 다 헝클어지겠어요!"],
+        head: ["[어두운, 얄미운] …머리는 만지지 마세요.", "[어두운, 얄미운] …지금 뭐 하는 거예요?", "[어두운, 얄미운] …그만요."],
+        head_sulk: ["[홍조] 흥! 이제 말 안 할 거예요!", "[홍조] 흥, 몰라요!"],
+        head_after: ["[홍조] …이번만 봐주는 거예요.", "[홍조] …다음엔 진짜 안 봐줄 거예요."],
         body: ["[하트] 불렀어요?", "[홍조] 왜, 왜요?", "[얄미운] 흐응~?", "[식은땀] 앗, 깜짝이야!", "[하트, 홍조] 오늘도 화이팅이에요!"],
         arm: ["[홍조] 손 잡고 싶은 거예요?", "[홍조] 팔은 왜요~?"],
         leg: ["[식은땀, 홍조] 어, 어디 만지는 거예요!", "[식은땀, 홍조] 다리는 안 돼요…!"],
@@ -720,6 +745,19 @@
           setTimeout(flee, 900);
         }
       };
+      const HEAD_SULK_AT = 3, SULK_MS = 15000;   // 머리 1~2번째 = 정색, 3번째 = 삐져서 15초 동안 터치 안 받음
+      const sulk = (now) => {
+        clicks = []; headClicks = [];
+        until.dark = until.smug = 0;   // 정색 표정을 지우고 삐진 얼굴로
+        gest.name = null;
+        sulkStart = now; sulkUntil = inputLockedUntil = now + SULK_MS;
+        sulkDir = Math.random() < 0.5 ? 1 : -1; sulkYaw = sulkRoll = 0;
+        // 15초 동안 몰래 보기 3번 (약 3초·7초·11초, 조금씩 어긋나게)
+        sulkPeeks = [0, 1, 2].map((i) => ({ at: 2800 + i * 4000 + (Math.random() - 0.5) * 1000, flip: Math.random() < 0.6, done: false }));
+        speak("head_sulk", 4000);
+        flashExp("blush", SULK_MS);
+        setTimeout(() => speak("head_after", 4000), SULK_MS);
+      };
       const onTouch = (x, y, d) => {
         const now = performance.now();
         if (now < inputLockedUntil) return;
@@ -733,8 +771,7 @@
         if (region === "head") {
           if (now - spamAt < 10000) { spamAt = -1e9; return speak("makeup"); }
           headClicks = headClicks.filter((t) => now - t < 8000); headClicks.push(now);
-          if (headClicks.length >= 5) { headClicks = []; play("laugh", 1800); return speak("head_many"); }
-          play(Math.random() < 0.45 ? "laugh" : "tilt", 1500);
+          if (headClicks.length >= HEAD_SULK_AT) return sulk(now);
           return speak("head");
         }
         if (region === "arm") return speak("arm");
@@ -838,7 +875,7 @@
 
       // 시작 인사 (가운데 연출 중): 0.7초 뒤 5.8초 동안
       setTimeout(() => { say(TEXT.hello, 5800, false, "reaction"); play("sway", 2300); }, 700);
-      window.__dsc = { say, play, setMood, flashExp, regionAt: (cx, cy) => { const h = hitAt(cx, cy); return h && touchRegion(h[0], h[1], h[2]); }, fleeX: () => fleeX, bubble: () => bubble.classList.contains("show") ? bubble.textContent : "", lines: TEXT, voice: (s) => { voiceState = s && s.speaking !== false ? s : null; } };   // 확인용
+      window.__dsc = { say, play, setMood, flashExp, sulking: () => performance.now() < sulkUntil, sulkPeeks: () => sulkPeeks.map((p) => ({ at: Math.round(p.at), flip: p.flip })), regionAt: (cx, cy) => { const h = hitAt(cx, cy); return h && touchRegion(h[0], h[1], h[2]); }, fleeX: () => fleeX, bubble: () => bubble.classList.contains("show") ? bubble.textContent : "", lines: TEXT, voice: (s) => { voiceState = s && s.speaking !== false ? s : null; } };   // 확인용
       setInterval(() => {
         const nowRunning = !!document.querySelector(UI.stop);
         if (nowRunning && !waitingKind) mutterCheck();
