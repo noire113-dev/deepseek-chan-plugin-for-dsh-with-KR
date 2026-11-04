@@ -953,6 +953,7 @@
         speak("body");
       };
       // 캔버스는 클릭을 통과시키므로, 문서 단계에서 캐릭터 위 클릭만 가로챔 (투명한 곳은 뒤 화면으로 그대로)
+      const POT_MS = 130;   // 머리에서 이 시간(ms) 안에 55px 넘게 쓸어내리면 냄비, 아니면 세숫대야
       let swallowClick = false, strokeFrom = null;   // strokeFrom: 머리를 누른 채 쓸어내리는지 지켜보는 중
       document.addEventListener("pointerdown", (e) => {
         swallowClick = false; strokeFrom = null;
@@ -966,10 +967,9 @@
       document.addEventListener("pointermove", (e) => {   // 머리에서 아래로 쓸어내림: 빠르면 냄비가 떨어지고, 천천히면 세숫대야를 씌움
         if (!strokeFrom) return;
         const dy = e.clientY - strokeFrom.y, dx = Math.abs(e.clientX - strokeFrom.x);
-        if (dy > 55 && dy > dx * 1.2) {
-          const st = strokeFrom; strokeFrom = null;
-          if (performance.now() - st.t < 200) potHit(st.x, st.y); else putBasin();
-        }
+        const el = performance.now() - strokeFrom.t, st = strokeFrom;
+        if (el < POT_MS) { if (dy > 55 && dy > dx * 1.2) { strokeFrom = null; potHit(st.x, st.y); } }   // 확실히 빠르게 쓸어야 냄비
+        else if (dy > 40 && dy > dx * 0.8) { strokeFrom = null; putBasin(); }   // 그보다 느리면 세숫대야 (짧고 조금 비스듬해도 인정)
       }, true);
       document.addEventListener("pointerup", () => {   // 쓸어내리지 않고 떼면 원래 머리 터치 반응
         if (!strokeFrom) return;
