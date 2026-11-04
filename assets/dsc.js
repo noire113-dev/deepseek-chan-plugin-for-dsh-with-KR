@@ -419,16 +419,17 @@
           // ---- 바라보는 곳 ----
           let tx, ty;
           if (muttering) { tx = 0.4; ty = 0.38; }                    // 혼잣말: 옆 위를 보며 생각
-          else if (now - lastMove < 2500 && !talking) {             // 마우스를 움직이면 눈은 커서를, 고개는 반쯤
+          else if (talking) { tx = attn.x * 0.25; ty = 0.05 + attn.y * 0.2; }   // 말할 땐 보는 사람을 봄 (마우스·딴 곳을 따라가지 않음)
+          else if (now - lastMove < 2500) {             // 마우스를 움직이면 눈은 커서를, 고개는 반쯤
             const r = canvas.getBoundingClientRect();
             tx = clamp((mx - (r.left + r.width / 2)) / 600, -1, 1);
             ty = clamp(((r.top + r.height * 0.25) - my) / 500, -1, 1);
           } else {
-            if (now > attn.next || (talking && Math.abs(attn.x) > 0.3 && Math.random() < dt * 2)) pickAttention(now, talking);
+            if (now > attn.next) pickAttention(now, talking);
             tx = attn.x; ty = attn.y;
           }
           // 눈은 빠르게(휙), 고개는 천천히 따라감 → 눈이 먼저 가고 고개가 뒤따르는 버튜버 느낌
-          spring(ex, tx, dt, 900, 55); spring(ey, ty, dt, 900, 55);
+          spring(ex, tx, dt, 420, 42); spring(ey, ty, dt, 420, 42);   // 눈: 빠르지만 튀지 않게 (덜 출렁임)
           spring(hx, tx * 0.85, dt, 38, 9.5); spring(hy, ty * 0.8, dt, 38, 9.5);
           look.x = hx.x; look.y = hy.x;
 
