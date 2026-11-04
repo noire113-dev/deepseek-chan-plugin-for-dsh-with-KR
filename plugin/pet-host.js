@@ -1,13 +1,17 @@
 // 바깥 펫 창: DSH 데스크톱의 Electron 실행 파일을 다시 써서 투명한 펫 창 프로세스를 띄우고, 창 안 캐릭터와 메시지를 이어 준다.
-// - 런타임: DSH 설치 폴더 파일을 하드링크(같은 드라이브면 디스크 0)로 묶고 resources/app 에 펫 앱(../pet/)만 넣는다.
+// - 런타임(Windows): DSH 설치 폴더 파일을 하드링크(같은 드라이브면 디스크 0)로 묶고 resources/app 에 펫 앱(../pet/)만 넣는다.
 //   (DSH Electron은 OnlyLoadAppFromAsar·asar 무결성 검사 fuse가 꺼져 있어 resources/app 폴더 앱을 불러온다)
-// - 연결: 창 안 캐릭터 ↔ 호스트 = DSH 웹 서버의 /deepseek-harness-kr/pet/*, 호스트 ↔ 펫 프로세스 = 이름 있는 파이프(JSON 한 줄씩)
-import { spawn } from 'node:child_process'
+// - 런타임(macOS): DSH.app 의 MacOS·Frameworks 를 APFS clone(cp -c, 디스크 0)으로 복제한 작은 .app 을 만들고, Info.plist 를 고쳐(번들 ID·LSUIElement)
+//   복사본만 ad-hoc 재서명한다. resources/app 은 고정 스텁(package.json 의 main 이 펫 앱을 가리킴)이라 펫 앱을 바꿔도 서명이 깨지지 않는다.
+// - 연결: 창 안 캐릭터 ↔ 호스트 = DSH 웹 서버의 /deepseek-harness-kr/pet/*,
+//   호스트 ↔ 펫 프로세스 = Windows 이름 있는 파이프 · macOS unix 소켓 (JSON 한 줄씩)
+import { execFile, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { copyFile, link, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { copyFile, link, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
+import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 
 export const PET_PATH = '/deepseek-harness-kr/pet'
@@ -30,8 +34,8 @@ async function mirror(from, to, skip) {
   }
 }
 
-/** DSH Electron 파일을 묶은 펫 런타임을 만들고(실행 파일이 바뀌었을 때만) 펫 앱을 새로 넣는다. @returns 펫 실행 파일 경로 */
-export async function prepareRuntime(exe, base, app = PET_APP) {
+/** Windows: DSH Electron 파일을 묶은 펫 런타임을 만들고(실행 파일이 바뀌었을 때만) 펫 앱을 새로 넣는다. @returns 펫 실행 파일 경로 */
+async function prepareWindowsRuntime(exe, base, app) {
   const info = await stat(exe)
   const want = `${info.size}:${Math.round(info.mtimeMs)}`
   const dir = join(base, 'electron'), stamp = join(dir, 'dsc-pet.stamp')
@@ -48,16 +52,99 @@ export async function prepareRuntime(exe, base, app = PET_APP) {
   return join(dir, PET_EXE)
 }
 
-const defaultBase = () => join(process.env.LOCALAPPDATA || join(homedir(), '.cache'), 'deepseek-harness-kr', 'pet-runtime')
+const run = promisify(execFile)
+const MAC_RECIPE = '1'   // 번들 구성 방법이 바뀌면 올려서 만들어 둔 런타임을 다시 만들게 함
+const MAC_APP = 'DeepSeekChanPet.app'
+const MAC_APP_ID = 'com.deepseek.dsh.dsc-pet'
+const MAC_COPY = ['MacOS', 'Frameworks', 'Info.plist', 'PkgInfo', join('Resources', 'icon.icns')]   // DSH.app/Contents 에서 복제할 것 (app.asar·runtime 등 큰 리소스는 제외)
+const MAC_EXE = /^(.*\.app)\/Contents\/MacOS\/[^/]+$/
+
+/** `…/X.app/Contents/MacOS/X` 형태면 그 .app 폴더 경로, 아니면 null (Windows 실행 파일 경로는 null) */
+export const macBundle = (exe) => MAC_EXE.exec(String(exe ?? ''))?.[1] ?? null
+
+const statKey = async (file) => { const info = await stat(file); return `${info.size}:${Math.round(info.mtimeMs)}` }
+
+async function macStamp(bundle, exe) {
+  const parts = await Promise.all([exe, join(bundle, 'Contents', 'Info.plist'), join(bundle, 'Contents', 'Frameworks', 'Electron Framework.framework', 'Electron Framework')].map(statKey))
+  return `${MAC_RECIPE}:${parts.join(':')}`
+}
+
+/** APFS clone(디스크 0)으로 복제하고, 클론이 안 되는 볼륨이면 일반 복사 */
+async function cloneTo(from, to, runner) {
+  await mkdir(dirname(to), { recursive: true })
+  try { await runner('/bin/cp', ['-cR', from, to]) } catch { await runner('/bin/cp', ['-R', from, to]) }
+}
+
+async function patchMacPlist(plist, runner) {
+  await runner('/usr/bin/plutil', ['-replace', 'CFBundleIdentifier', '-string', MAC_APP_ID, plist])   // DSH 와 다른 앱으로 보이게
+  await runner('/usr/bin/plutil', ['-replace', 'LSUIElement', '-bool', 'true', plist])             // Dock·앱 전환기·메뉴 막대에 안 나타남
+  for (const key of ['ElectronAsarIntegrity', 'CFBundleURLTypes']) await runner('/usr/bin/plutil', ['-remove', key, plist]).catch(() => {})   // 없는 app.asar 해시·dsh:// 스킴 가로채기 제거
+}
+
+/** DSH.app 일부를 복제해 펫 전용 .app 을 만든다. 수정한 사본만 ad-hoc 재서명하며 원본 앱은 읽기만 한다. */
+async function buildMacBundle(bundle, out, runner) {
+  const contents = join(out, 'Contents')
+  for (const name of MAC_COPY) await cloneTo(join(bundle, 'Contents', name), join(contents, name), runner).catch((error) => { if (!name.startsWith('Resources')) throw error })
+  const stub = join(contents, 'Resources', 'app')
+  await mkdir(stub, { recursive: true })
+  await writeFile(join(stub, 'package.json'), JSON.stringify({ name: 'dsc-pet', main: '../../../../pet-app/main.cjs' }))   // out/../pet-app (Contents/Resources/app 에서 네 칸 위)
+  await patchMacPlist(join(contents, 'Info.plist'), runner)
+  await runner('/usr/bin/xattr', ['-dr', 'com.apple.quarantine', out]).catch(() => {})
+  await runner('/usr/bin/codesign', ['--force', '-s', '-', out])   // 하드닝 런타임 플래그를 붙이면 DSH 서명 Frameworks 와 섞여 실행이 멈춤(실측)
+}
+
+/** macOS: 실행 파일이 바뀌었을 때만 펫 .app 을 만들고, 펫 앱은 .app 밖(pet-app)에 새로 넣는다. @returns 펫 실행 파일 경로 */
+async function prepareMacRuntime(exe, base, app, runner) {
+  const bundle = macBundle(exe), dir = join(base, 'electron'), stamp = join(dir, 'dsc-pet.stamp')
+  const want = await macStamp(bundle, exe)
+  if (await readFile(stamp, 'utf8').catch(() => '') !== want) {
+    await rm(dir, { recursive: true, force: true })
+    await mkdir(dir, { recursive: true })
+    await buildMacBundle(bundle, join(dir, MAC_APP), runner)
+    await writeFile(stamp, want)
+  }
+  const target = join(dir, 'pet-app')
+  await rm(target, { recursive: true, force: true })
+  await mkdir(target, { recursive: true })
+  for (const name of await readdir(app)) await copyFile(join(app, name), join(target, name))
+  return join(dir, MAC_APP, 'Contents', 'MacOS', basename(exe))
+}
+
+/** 펫 런타임을 준비한다. 실행 파일 모양으로 플랫폼을 가림 (…/X.app/Contents/MacOS/X = macOS). @returns 펫 실행 파일 경로 */
+export function prepareRuntime(exe, base, app = PET_APP, runner = run) {
+  return macBundle(exe) ? prepareMacRuntime(exe, base, app, runner) : prepareWindowsRuntime(exe, base, app)
+}
+
+/** 호스트 ↔ 펫 프로세스 연결 지점. Windows = 이름 있는 파이프, macOS = 짧은 경로의 unix 소켓(sun_path 104바이트 한계, 0700 폴더 안). cleanup 은 폴더를 지움 */
+export async function createEndpoint(platform = process.platform, tmp = tmpdir()) {
+  if (platform === 'win32') return { path: `\\\\.\\pipe\\dsc-pet-${process.pid}-${randomUUID()}`, cleanup: async () => {} }
+  const root = Buffer.byteLength(tmp) > 70 ? '/tmp' : tmp   // 소켓 경로 = root/dsc-pet-XXXXXX/s (약 18바이트 추가)
+  const dir = await mkdtemp(join(root, 'dsc-pet-'))
+  return { path: join(dir, 's'), cleanup: () => rm(dir, { recursive: true, force: true }) }
+}
+
+const supportedOn = (platform, exe) => !!exe && (platform === 'win32' || (platform === 'darwin' && !!macBundle(exe)))
+
+/** 펫 프로세스 실행 옵션과 환경 (ELECTRON_RUN_AS_NODE 가 남아 있으면 Node 로만 돌고 창이 안 뜸) */
+function petSpawn(platform, base = process.env) {
+  const env = { ...base }
+  delete env.ELECTRON_RUN_AS_NODE; delete env.NODE_OPTIONS
+  if (platform === 'darwin') { delete env.__CFBundleIdentifier; return { env, stdio: 'ignore' } }
+  return { env, stdio: 'ignore', windowsHide: false }
+}
+
+const defaultBase = (platform = process.platform) => platform === 'darwin'
+  ? join(homedir(), 'Library', 'Application Support', 'deepseek-harness-kr', 'pet-runtime')
+  : join(process.env.LOCALAPPDATA || join(homedir(), '.cache'), 'deepseek-harness-kr', 'pet-runtime')
 
 /**
  * 펫 프로세스 하나를 관리한다. 처음 끌 때 숨긴 채로 띄워 두고(warm), 창 밖으로 던지면 보여 준다(open).
  * 붙으면 창 안 캐릭터가 숨김을 요청하고 프로세스는 남아 다음에 바로 뜬다. 호스트가 내려가면 파이프가 끊겨 펫도 끝난다.
  */
-export function createPetManager({ assets, exe = electronExecutable(), platform = process.platform, base = defaultBase(), app = PET_APP, spawnImpl = spawn } = {}) {
-  const supported = platform === 'win32' && !!exe
+export function createPetManager({ assets, exe = electronExecutable(), platform = process.platform, base = defaultBase(platform), app = PET_APP, spawnImpl = spawn, prepare = prepareRuntime } = {}) {
+  const supported = supportedOn(platform, exe)
   // seq: 마지막으로 연 회차 (새로 불러온 화면이 이어받음), disposed: 플러그인이 내려감 (시작 도중이면 펫을 띄우지 않음)
-  let child = null, server = null, socket = null, starting = null, state = 'none', seq, disposed = false
+  let child = null, server = null, socket = null, starting = null, state = 'none', seq, disposed = false, endpoint = null
   const events = [], outbox = []
   const write = (message) => {
     if (socket) socket.write(JSON.stringify(message) + '\n')
@@ -73,13 +160,15 @@ export function createPetManager({ assets, exe = electronExecutable(), platform 
   const reset = () => {
     child = null; socket = null; starting = null; state = 'none'; outbox.length = 0
     server?.close(); server = null
+    endpoint?.cleanup().catch(() => {}); endpoint = null
   }
   const start = () => starting ??= (async () => {
-    const pipe = `\\\\.\\pipe\\dsc-pet-${process.pid}-${randomUUID()}`
+    const ep = endpoint = await createEndpoint(platform)
+    const pipe = ep.path
     server = createServer((s) => {
       if (socket) { s.destroy(); return }
       socket = s
-      server.close()   // 파이프 이름이 실행 인자에 드러나므로 펫이 붙은 뒤에는 다른 연결을 받지 않음
+      server.close()   // 연결 지점 이름이 실행 인자에 드러나므로 펫이 붙은 뒤에는 다른 연결을 받지 않음
       s.setEncoding('utf8')
       let buffer = ''
       s.on('data', (chunk) => {
@@ -97,11 +186,9 @@ export function createPetManager({ assets, exe = electronExecutable(), platform 
     const srv = server
     await new Promise((resolve, reject) => { srv.once('error', reject); srv.once('close', () => reject(new Error('disposed'))); srv.listen(pipe, resolve) })
     if (disposed) throw new Error('disposed')
-    const bin = await prepareRuntime(exe, base, app)
+    const bin = await prepare(exe, base, app)
     if (disposed) throw new Error('disposed')
-    const env = { ...process.env }
-    delete env.ELECTRON_RUN_AS_NODE; delete env.NODE_OPTIONS
-    const c = child = spawnImpl(bin, [`--dsc-pipe=${pipe}`, `--dsc-assets=${assets}`], { env, stdio: 'ignore', windowsHide: false })
+    const c = child = spawnImpl(bin, [`--dsc-pipe=${pipe}`, `--dsc-assets=${assets}`], petSpawn(platform))
     state = 'starting'
     // 지금 회차 번호를 붙여, 창 안 쪽이 이전 회차에 쌓인 종료 알림으로 진행 중인 따라오기를 끊지 않게 함. 이미 다른 프로세스로 바뀌었으면 무시
     c.once('exit', () => { if (child !== c) return; reset(); events.push({ type: 'closed', seq }) })

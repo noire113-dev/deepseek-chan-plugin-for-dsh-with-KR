@@ -1,12 +1,15 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
+import { execFile } from 'node:child_process'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { lstat, mkdtemp, mkdir, readdir, readFile, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
+import { connect } from 'node:net'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { createPetHandler, createPetManager, electronExecutable, prepareRuntime, PET_PATH } from '../pet-host.js'
+import { dirname, join } from 'node:path'
+import { promisify } from 'node:util'
+import { createEndpoint, createPetHandler, createPetManager, electronExecutable, macBundle, prepareRuntime, PET_PATH } from '../pet-host.js'
 
 test('pet runtime reuses the DSH Electron files and replaces only the app folder', async () => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-kr-pet-'))
@@ -86,11 +89,12 @@ test('pet process exit is reported and the manager can start again', async () =>
     await mkdir(dsh); await mkdir(app)
     await writeFile(join(dsh, 'DeepSeek Harness.exe'), 'exe'); await writeFile(join(app, 'main.cjs'), '')
     const children = []
-    const spawnImpl = (bin, args) => { const c = new EventEmitter(); c.kill = () => c.emit('exit'); c.args = args; children.push(c); return c }
+    const spawnImpl = (bin, args, opts) => { const c = new EventEmitter(); c.kill = () => c.emit('exit'); c.args = args; c.opts = opts; children.push(c); return c }
     const pet = createPetManager({ assets: 'A', exe: join(dsh, 'DeepSeek Harness.exe'), platform: 'win32', base: join(root, 'rt'), app, spawnImpl })
     await pet.warm()
     assert.equal(children.length, 1)
     assert.ok(children[0].args.some((a) => a === '--dsc-assets=A'))
+    assert.equal(children[0].opts.windowsHide, false)
     assert.equal(pet.status().state, 'starting')
     await pet.open({ seq: 3, from: { k: 1, x: 0, y: 0 }, to: { k: 1, x: 0, y: 0 } })
     children[0].emit('exit')
@@ -118,3 +122,180 @@ test('pet manager does not spawn when disposed while preparing the runtime', asy
     assert.equal(spawned, 0)
   } finally { await rm(root, { recursive: true, force: true }) }
 })
+
+// ---------- macOS ----------
+const posixOnly = { skip: process.platform === 'win32' && 'unix 소켓은 POSIX 에서만 시험' }
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+const exists = (path) => stat(path).then(() => true, () => false)
+
+/** 가짜 DSH.app: 실행 파일 스텁, 서명된 Frameworks, 큰 리소스(app.asar·runtime) */
+async function fakeDshApp(root) {
+  const app = join(root, 'DeepSeek Harness.app'), contents = join(app, 'Contents')
+  await mkdir(join(contents, 'MacOS'), { recursive: true }); await mkdir(join(contents, 'Resources', 'runtime'), { recursive: true })
+  await mkdir(join(contents, 'Frameworks', 'Electron Framework.framework', 'Versions', 'A'), { recursive: true })
+  await writeFile(join(contents, 'MacOS', 'DeepSeek Harness'), 'stub')
+  await writeFile(join(contents, 'Frameworks', 'Electron Framework.framework', 'Versions', 'A', 'Electron Framework'), 'framework')
+  await symlink('Versions/A/Electron Framework', join(contents, 'Frameworks', 'Electron Framework.framework', 'Electron Framework'))
+  await writeFile(join(contents, 'Info.plist'), 'plist'); await writeFile(join(contents, 'PkgInfo'), 'APPL????')
+  await writeFile(join(contents, 'Resources', 'icon.icns'), 'icon'); await writeFile(join(contents, 'Resources', 'app.asar'), 'dsh app')
+  await writeFile(join(contents, 'Resources', 'runtime', 'big.bin'), 'runtime')
+  return join(contents, 'MacOS', 'DeepSeek Harness')
+}
+
+/** 실제 /bin/cp 는 쓰되(클론 옵션만 뺌) plutil·xattr·codesign 은 호출만 기록하는 실행기 */
+function recorder({ failClone = false, failRemove = false } = {}) {
+  const calls = [], runner = async (cmd, args) => {
+    calls.push([cmd, ...args])
+    if (cmd === '/bin/cp') {
+      if (failClone && args[0] === '-cR') throw new Error('clone unsupported')
+      await promisify(execFile)('/bin/cp', ['-R', ...args.slice(1)])
+    }
+    if (failRemove && args[0] === '-remove') throw new Error('No value at that key path')
+  }
+  return { calls, runner }
+}
+
+test('macBundle recognizes only executables inside an .app bundle', () => {
+  assert.equal(macBundle('/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness'), '/Applications/DeepSeek Harness.app')
+  assert.equal(macBundle('C:/Users/me/AppData/Local/Programs/DeepSeek Harness/DeepSeek Harness.exe'), null)
+  assert.equal(macBundle('/usr/local/bin/node'), null)
+  assert.equal(macBundle(null), null)
+})
+
+test('pet manager supports darwin only for an .app bundle executable', () => {
+  const bundleExe = '/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness'
+  assert.equal(createPetManager({ assets: 'x', exe: bundleExe, platform: 'darwin' }).status().supported, true)
+  assert.equal(createPetManager({ assets: 'x', exe: '/usr/local/bin/node', platform: 'darwin' }).status().supported, false)
+  assert.equal(createPetManager({ assets: 'x', exe: null, platform: 'darwin' }).status().supported, false)
+  assert.equal(createPetManager({ assets: 'x', exe: bundleExe, platform: 'linux' }).status().supported, false)
+  assert.equal(createPetManager({ assets: 'x', exe: 'C:/dsh.exe', platform: 'win32' }).status().supported, true)
+})
+
+test('mac pet runtime clones a small ad-hoc signed bundle and keeps the pet app outside the signature', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-kr-pet-'))
+  try {
+    const exe = await fakeDshApp(root), app = join(root, 'pet'), base = join(root, 'runtime'), out = join(base, 'electron', 'DeepSeekChanPet.app')
+    await mkdir(app); await writeFile(join(app, 'main.cjs'), 'v1')
+    const { calls, runner } = recorder({ failRemove: true })
+    const bin = await prepareRuntime(exe, base, app, runner)
+    assert.equal(bin, join(out, 'Contents', 'MacOS', 'DeepSeek Harness'))
+    assert.equal(await readFile(bin, 'utf8'), 'stub')
+    assert.equal(await readFile(join(out, 'Contents', 'Frameworks', 'Electron Framework.framework', 'Versions', 'A', 'Electron Framework'), 'utf8'), 'framework')
+    assert.equal((await lstat(join(out, 'Contents', 'Frameworks', 'Electron Framework.framework', 'Electron Framework'))).isSymbolicLink(), true)
+    assert.equal(await readFile(join(out, 'Contents', 'Resources', 'icon.icns'), 'utf8'), 'icon')
+    // 큰 리소스(app.asar·runtime)와 원래 앱은 가져오지 않음, 스텁은 고정 package.json (펫 앱을 .app 밖에서 불러옴)
+    assert.equal(await exists(join(out, 'Contents', 'Resources', 'app.asar')), false)
+    assert.equal(await exists(join(out, 'Contents', 'Resources', 'runtime')), false)
+    const stub = JSON.parse(await readFile(join(out, 'Contents', 'Resources', 'app', 'package.json'), 'utf8'))
+    assert.equal(join(out, 'Contents', 'Resources', 'app', stub.main), join(base, 'electron', 'pet-app', 'main.cjs'))
+    assert.equal(await readFile(join(base, 'electron', 'pet-app', 'main.cjs'), 'utf8'), 'v1')
+    // Info.plist 수정(없는 키 제거 오류는 무시) 뒤 사본만 서명. 서명이 마지막
+    const plist = join(out, 'Contents', 'Info.plist')
+    assert.deepEqual(calls.filter(([cmd]) => cmd !== '/bin/cp'), [
+      ['/usr/bin/plutil', '-replace', 'CFBundleIdentifier', '-string', 'com.deepseek.dsh.dsc-pet', plist],
+      ['/usr/bin/plutil', '-replace', 'LSUIElement', '-bool', 'true', plist],
+      ['/usr/bin/plutil', '-remove', 'ElectronAsarIntegrity', plist],
+      ['/usr/bin/plutil', '-remove', 'CFBundleURLTypes', plist],
+      ['/usr/bin/xattr', '-dr', 'com.apple.quarantine', out],
+      ['/usr/bin/codesign', '--force', '-s', '-', out],
+    ])
+    assert.ok(calls.filter(([cmd]) => cmd === '/bin/cp').every(([, flag]) => flag === '-cR'))
+    // 원본 앱은 건드리지 않음 (plist 내용 그대로)
+    assert.equal(await readFile(join(dirname(dirname(exe)), 'Info.plist'), 'utf8'), 'plist')
+    // 같은 실행 파일이면 .app 은 그대로(다시 서명 안 함), 펫 앱만 새로 넣음
+    await writeFile(join(app, 'main.cjs'), 'v2')
+    const again = recorder()
+    await prepareRuntime(exe, base, app, again.runner)
+    assert.deepEqual(again.calls, [])
+    assert.equal(await readFile(join(base, 'electron', 'pet-app', 'main.cjs'), 'utf8'), 'v2')
+    // DSH 가 업데이트되어 실행 파일이 바뀌면 처음부터 다시 만듦
+    await utimes(exe, new Date(), new Date(Date.now() + 5000))
+    const rebuilt = recorder()
+    await prepareRuntime(exe, base, app, rebuilt.runner)
+    assert.ok(rebuilt.calls.some(([cmd]) => cmd === '/usr/bin/codesign'))
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('mac pet runtime falls back to a plain copy when APFS clone is unavailable', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-kr-pet-'))
+  try {
+    const exe = await fakeDshApp(root), app = join(root, 'pet')
+    await mkdir(app); await writeFile(join(app, 'main.cjs'), '')
+    const { calls, runner } = recorder({ failClone: true })
+    const bin = await prepareRuntime(exe, join(root, 'runtime'), app, runner)
+    assert.equal(await readFile(bin, 'utf8'), 'stub')
+    assert.ok(calls.some(([cmd, flag]) => cmd === '/bin/cp' && flag === '-R'))
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('mac pet runtime stops at a failed signature and does not leave a stamp', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-kr-pet-'))
+  try {
+    const exe = await fakeDshApp(root), app = join(root, 'pet'), base = join(root, 'runtime')
+    await mkdir(app)
+    const runner = async (cmd, args) => { if (cmd === '/usr/bin/codesign') throw new Error('codesign failed'); if (cmd === '/bin/cp') await promisify(execFile)('/bin/cp', ['-R', ...args.slice(1)]) }
+    await assert.rejects(prepareRuntime(exe, base, app, runner), /codesign failed/)
+    assert.equal(await exists(join(base, 'electron', 'dsc-pet.stamp')), false)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('pet endpoint is a named pipe on Windows and a short private unix socket path elsewhere', async () => {
+  const pipe = await createEndpoint('win32')
+  assert.match(pipe.path, /^\\\\\.\\pipe\\dsc-pet-\d+-[0-9a-f-]{36}$/)
+  await pipe.cleanup()
+  const unix = await createEndpoint('darwin')
+  try {
+    assert.ok(Buffer.byteLength(unix.path) < 104)
+    assert.equal((await stat(dirname(unix.path))).mode & 0o777, 0o700)
+  } finally { await unix.cleanup() }
+  assert.equal(await exists(dirname(unix.path)), false)
+  const long = await createEndpoint('darwin', '/tmp/' + 'x'.repeat(90).replace(/x/g, 'a'))
+  assert.ok(long.path.startsWith('/tmp/dsc-pet-') && Buffer.byteLength(long.path) < 104)   // tmp 경로가 길면 /tmp 로 대신
+  await long.cleanup()
+})
+
+test('mac pet process gets a unix socket, accepts one connection and cleans up on exit', posixOnly, async () => {
+  const launches = []
+  const spawnImpl = (bin, args, opts) => { const c = new EventEmitter(); c.kill = () => c.emit('exit'); launches.push({ bin, args, opts, c }); return c }
+  const exe = '/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness'
+  const pet = createPetManager({ assets: 'A', exe, platform: 'darwin', base: 'B', app: 'P', spawnImpl, prepare: async (e, b, a) => { assert.deepEqual([e, b, a], [exe, 'B', 'P']); return '/pet/bin' } })
+  const old = { ...process.env }; process.env.ELECTRON_RUN_AS_NODE = '1'; process.env.__CFBundleIdentifier = 'com.deepseek.dsh'
+  try { await pet.warm() } finally { process.env = old }
+  const [{ bin, args, opts, c }] = launches
+  assert.equal(bin, '/pet/bin')
+  const sockPath = args.find((a) => a.startsWith('--dsc-pipe=')).slice('--dsc-pipe='.length)
+  assert.ok(args.includes('--dsc-assets=A'))
+  assert.equal(opts.stdio, 'ignore'); assert.equal('windowsHide' in opts, false)
+  for (const key of ['ELECTRON_RUN_AS_NODE', 'NODE_OPTIONS', '__CFBundleIdentifier']) assert.equal(key in opts.env, false)
+  // 펫이 연결해 ready 를 보내면 hidden, 호스트가 보내는 open 은 한 줄 JSON 으로 도착
+  const socket = connect(sockPath); await once(socket, 'connect')
+  const received = []; socket.setEncoding('utf8'); socket.on('data', (d) => received.push(d))
+  socket.write(JSON.stringify({ type: 'ready' }) + '\n'); await sleep(100)
+  assert.equal(pet.status().state, 'hidden')
+  await pet.open({ seq: 2, from: { k: 1, x: 1, y: 2 }, to: { k: 1, x: 3, y: 4 } }); await sleep(100)
+  assert.deepEqual(JSON.parse(received.join('').trim()), { type: 'open', from: { k: 1, x: 1, y: 2 }, to: { k: 1, x: 3, y: 4 }, follow: false, seq: 2 })
+  // 붙은 뒤에는 소켓이 닫혀 다른 프로세스는 연결할 수 없음
+  const late = connect(sockPath); await once(late, 'error')
+  socket.destroy(); c.emit('exit'); await sleep(50)
+  assert.equal(await exists(dirname(sockPath)), false)
+  assert.deepEqual(pet.status().events.map((e) => e.type), ['closed'])
+})
+
+test('mac pet runtime is removed when disposed while preparing', posixOnly, async () => {
+  let release
+  const before = new Set(await socketDirs())
+  const prepare = () => new Promise((resolve) => { release = resolve })
+  const pet = createPetManager({ assets: 'A', exe: '/Applications/X.app/Contents/MacOS/X', platform: 'darwin', prepare, spawnImpl: () => { throw new Error('should not spawn') } })
+  const warming = pet.warm()
+  while (!release) await sleep(10)
+  const [sockDir] = (await socketDirs()).filter((dir) => !before.has(dir))
+  assert.equal(await exists(sockDir), true)
+  pet.dispose(); release('/pet/bin')
+  await assert.rejects(warming)
+  await sleep(50)
+  assert.equal(await exists(sockDir), false)
+})
+
+async function socketDirs() {
+  return (await readdir(tmpdir())).filter((n) => n.startsWith('dsc-pet-')).map((n) => join(tmpdir(), n))
+}
