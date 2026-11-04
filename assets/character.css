@@ -32,6 +32,13 @@ html.dsc-hover, html.dsc-hover * { cursor: pointer !important; }
   border: 2px dashed #b9c6ff;
 }
 #dsc-bubble.mutter::after { border-color: #b9c6ff; border-style: dashed; }
+/* 점선 꼬리: 14px 정사각형을 그대로 자르면 잘린 끝에 정사각형 모서리(꺾이는 점선)가 작은 삼각형으로 남는다.
+   20px로 키워 V선을 박스 안쪽까지 늘이고(꼭짓점 위치는 그대로) 박스 안쪽 선에서 잘라 끝을 수평으로 맞춘다.
+   두 V선 사이(입구 배경)만 잘린 선을 0.5px 위로 올려, 테두리 위쪽 가장자리가 입구에 희미한 가로줄로 비치지 않게 한다. */
+#dsc-bubble.mutter:not(.side)::after {
+  width: 20px; height: 20px; right: 43px; bottom: -5.76px;
+  clip-path: polygon(100% 6px, 18px 8px, 18px 7.29px, 7.29px 18px, 8px 18px, 6px 100%, 100% 100%);
+}
 
 html body[data-ds-dark-theme] #dsc-bubble {
   --dsc-bubble-bg: #22242bf2;
