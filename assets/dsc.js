@@ -375,10 +375,10 @@
           for (const ch of w) {
             const c = ch.charCodeAt(0);
             if (c >= 0xac00 && c <= 0xd7a3) {
-              syl.push({ v: JUNG[Math.floor(((c - 0xac00) % 588) / 28)], d: 0.12 + Math.random() * 0.04, amp: 0.65 + Math.random() * 0.35, stress: first });
+              syl.push({ v: JUNG[Math.floor(((c - 0xac00) % 588) / 28)], d: 0.15 + Math.random() * 0.05, amp: 0.65 + Math.random() * 0.35, stress: first });
               first = false;
             } else if (/[aeiouy]/i.test(ch)) {
-              if (!prevVowel) { const l = ch.toLowerCase(); syl.push({ v: l === "a" ? "A" : l === "e" ? "E" : l === "o" ? "O" : l === "u" ? "U" : "I", d: 0.1 + Math.random() * 0.04, amp: 0.55 + Math.random() * 0.35, stress: first }); first = false; }
+              if (!prevVowel) { const l = ch.toLowerCase(); syl.push({ v: l === "a" ? "A" : l === "e" ? "E" : l === "o" ? "O" : l === "u" ? "U" : "I", d: 0.13 + Math.random() * 0.05, amp: 0.55 + Math.random() * 0.35, stress: first }); first = false; }
               prevVowel = true; continue;
             } else if (/[.,!?…~。，！？]/.test(ch)) syl.push({ v: null, d: ch === "," || ch === "，" ? 0.12 : 0.24 });
             else if (/[0-9]/.test(ch)) { syl.push({ v: "A", d: 0.12, amp: 0.7, stress: first }); first = false; }
@@ -456,7 +456,7 @@
             open = clamp(voiceState.level, 0, 1) * 0.9;
             if (voiceState.vowels) for (const k of VOW) vowel[k] = Math.max(vowel[k] * 0.4, clamp(voiceState.vowels[k] || 0, 0, 1));
           }
-          mouthOpen += (open - mouthOpen) * Math.min(1, dt * 22);
+          mouthOpen += (open - mouthOpen) * Math.min(1, dt * 16);   // 입은 조금 부드럽게 따라감 (너무 파닥거리지 않게)
           browKick *= Math.max(0, 1 - dt * 3.5);
           nodKick *= Math.max(0, 1 - dt * 5);
 
