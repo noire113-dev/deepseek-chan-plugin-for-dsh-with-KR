@@ -480,7 +480,8 @@
           let roll = noise(T * 0.27, 3) * 7.5 * energy - hx.x * hy.x * 7 + pose.headZ;
           // 말하는 동안 고개를 천천히 좌우로 기울이고 살짝 돌림 (입만 움직이고 얼굴이 굳어 보이지 않게)
           talkSway += ((talking && !muttering ? 1 : 0) - talkSway) * Math.min(1, dt * 2.5);
-          if (talkSway > 0.01) { roll += Math.sin(T * Math.PI * 2 * 0.55) * 4 * talkSway; yaw += Math.sin(T * Math.PI * 2 * 0.31 + 1.3) * 4.5 * talkSway; pitch += Math.sin(T * Math.PI * 2 * 0.47 + 0.6) * 1.5 * talkSway; }
+          const swayYaw = Math.sin(T * Math.PI * 2 * 0.31 + 1.3) * 4.5 * talkSway, swayPitch = Math.sin(T * Math.PI * 2 * 0.47 + 0.6) * 1.5 * talkSway;
+          if (talkSway > 0.01) { roll += Math.sin(T * Math.PI * 2 * 0.55) * 4 * talkSway; yaw += swayYaw; pitch += swayPitch; }
           // ---- 몸 (PositionX/Y/Z·LeanInput → 물리가 몸통을 늦게 따라 움직임) ----
           let bodyX = hx.x * 8 + noise(T * 0.17, 4) * 5 * energy;
           let bodyZ = roll * 0.5 + noise(T * 0.21, 5) * 3 * energy;
@@ -558,8 +559,8 @@
 
           // ---- 눈: 눈동자는 고개보다 먼저 (머리 기준 상대 위치) ----
           // 눈동자는 작게만 (크게 움직이면 흰자가 드러나 곁눈질처럼 보임)
-          core.addParameterValueById("ParamEyeBallX", clamp(((ex.x - hx.x) * 0.9 + hx.x * 0.2) * 0.6, -0.45, 0.45) * (1 - sk) + sulkEye * sk);
-          core.addParameterValueById("ParamEyeBallY", clamp(((ey.x - hy.x) * 0.9 + hy.x * 0.2) * 0.6, -0.3, 0.3));
+          core.addParameterValueById("ParamEyeBallX", clamp(((ex.x - hx.x) * 0.9 + hx.x * 0.2) * 0.6, -0.45, 0.45) * (1 - sk) + sulkEye * sk - swayYaw / 30 * (1 - sk));   // 말하며 고개를 돌려도 눈동자는 정면을 봄
+          core.addParameterValueById("ParamEyeBallY", clamp(((ey.x - hy.x) * 0.9 + hy.x * 0.2) * 0.6 - swayPitch / 30, -0.3, 0.3));
           core.setParameterValueById("ParamBreath", 0.5 + 0.5 * Math.sin(T * 2 * Math.PI / 3.6));
 
           // ---- 눈썹 (귀가 따라 움직임) ----
