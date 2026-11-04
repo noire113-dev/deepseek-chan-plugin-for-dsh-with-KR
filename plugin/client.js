@@ -1,5 +1,6 @@
 // The original animation stays in assets/dsc.js; each feature owns its lifecycle here.
 const ROOT = '/deepseek-harness-kr/assets/'
+const PET_ROOT = '/deepseek-harness-kr/pet/'
 const SLOT = '__deepseekHarnessKrDispose'
 const ENTRY_ID = 'deepseek-harness-kr'
 // 소품·옷 (데스크톱 펫 메뉴와 같은 항목, 세숫대야·앞으로 숙이기는 뺌)과 체형
@@ -127,6 +128,12 @@ function startCharacter(life) {
     document.documentElement.classList.remove('dsc-hover')
   })
   stylesheet(life, 'character.css')
+  // 캐릭터를 끄거나 플러그인이 내려가면 바깥 펫 창도 숨김 (이 화면에서 펫 창을 쓴 적이 있을 때만)
+  life.add(() => {
+    if (!window.__dscPetUsed) return
+    delete window.__dscPetUsed
+    try { window.fetch(PET_ROOT + 'hide', { method: 'POST', keepalive: true }).catch(() => {}) } catch {}
+  })
   mountCharacter(life)
 }
 
