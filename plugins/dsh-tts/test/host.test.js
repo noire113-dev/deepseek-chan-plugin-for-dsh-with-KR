@@ -4,7 +4,7 @@ import test from 'node:test'
 import { createCache } from '../src/cache.js'
 import { normalize } from '../src/config.js'
 import { createSpeakHandler } from '../src/host.js'
-import { apply } from '../src/index.js'
+import { apply, registerSpeechRoutes } from '../src/index.js'
 
 const KEY_ENV = 'DSH_TTS_TEST_KEY'
 const PCM = [Buffer.from([1, 0, 2, 0]), Buffer.from([3, 0, 4, 0]), Buffer.from([5, 0, 6, 0])]
@@ -141,6 +141,16 @@ test('disabled registers no routes, invalid config names its field', () => {
   assert.deepEqual(routes, [])
   assert.throws(() => apply(ctx, { enabled: true, openai: { model: 42 } }), /config\.openai\.model/)
   assert.throws(() => apply(ctx, { enabled: true, openai: { baseUrl: 'ftp://nope' } }), /config\.openai\.baseUrl/)
+  assert.throws(() => apply(ctx, { enabled: true, openai: { apiKeyEnv: 'not a name' } }), /config\.openai\.apiKeyEnv/)
+})
+
+test('defaults assume no endpoint, model or voice', () => {
+  const config = normalize({ enabled: true, openai: { baseUrl: ' http://127.0.0.1:8000/v1/ ', model: ' m ' } })
+  assert.equal(config.openai.baseUrl, 'http://127.0.0.1:8000/v1')
+  assert.equal(config.openai.model, 'm')
+  assert.equal(config.openai.voice, '')
+  assert.equal(config.openai.apiKeyEnv, 'DSH_TTS_API_KEY')
+  assert.equal(normalize({}).openai.baseUrl, '')
 })
 
 test('state route exposes the contract shape', async () => {
@@ -198,7 +208,7 @@ test('speak answers 503 when the configured env var is unset', async () => {
 test('miss streams PCM and an identical line is served from cache', async () => {
   process.env[KEY_ENV] = 'test-key'
   const upstream = await startUpstream()
-  const host = await startHost(upstream.port, { openai: { apiKeyEnv: KEY_ENV } })
+  const host = await startHost(upstream.port, { openai: { apiKeyEnv: KEY_ENV, model: 'tts-model', voice: 'tts-voice' } })
   try {
     const first = await speak(host.url, { text: 'hello there' })
     assert.equal(first.status, 200)
@@ -209,8 +219,8 @@ test('miss streams PCM and an identical line is served from cache', async () => 
     assert.equal(upstream.stats.calls, 1)
     assert.equal(upstream.stats.authorizations[0], 'Bearer test-key')
     assert.deepEqual(upstream.stats.bodies[0], {
-      model: 'gpt-4o-mini-tts',
-      voice: 'alloy',
+      model: 'tts-model',
+      voice: 'tts-voice',
       input: 'hello there',
       response_format: 'pcm',
       stream_format: 'audio',
@@ -277,7 +287,7 @@ test('a client disconnect aborts the upstream request', async () => {
 test('createSpeakHandler honors an injected fetch and clock', async () => {
   process.env[KEY_ENV] = 'test-key'
   let clock = 1000
-  const config = normalize({ enabled: true, openai: { apiKeyEnv: KEY_ENV }, cache: { ttlMs: 1000 } })
+  const config = normalize({ enabled: true, openai: { baseUrl: 'https://api.openai.com/v1', apiKeyEnv: KEY_ENV }, cache: { ttlMs: 1000 } })
   const calls = []
   const handler = createSpeakHandler(config, {
     now: () => clock,
@@ -389,5 +399,108 @@ test('empty apiKeyEnv sends no Authorization and needs no key', async () => {
   } finally {
     await host.close()
     await upstream.close()
+  }
+})
+
+test('empty model and voice are left out of the request', async () => {
+  const upstream = await startUpstream()
+  const host = await startHost(upstream.port, { openai: { apiKeyEnv: '' } })
+  try {
+    await (await speak(host.url, { text: 'server default' })).arrayBuffer()
+    const body = upstream.stats.bodies.at(-1)
+    assert.equal('model' in body, false)
+    assert.equal('voice' in body, false)
+    assert.equal(body.input, 'server default')
+  } finally {
+    await host.close()
+    await upstream.close()
+  }
+})
+
+/** Serve registerSpeechRoutes over a live config the test can change. */
+async function startLiveHost(initial, ctxExtras = {}) {
+  const routes = new Map()
+  const disposers = []
+  let raw = initial
+  const ctx = {
+    ...ctxExtras,
+    webServer: {
+      register({ path, handler }) {
+        routes.set(path, handler)
+        return () => routes.delete(path)
+      },
+    },
+    effect(fn) {
+      disposers.push(fn())
+    },
+  }
+  registerSpeechRoutes(ctx, () => normalize(raw))
+  const server = http.createServer((req, res) => {
+    const handler = routes.get(req.url)
+    if (handler === undefined) return res.writeHead(404).end()
+    handler(req, res)
+  })
+  const port = await listen(server)
+  return {
+    url: 'http://127.0.0.1:' + port,
+    routes,
+    set(next) {
+      raw = next
+    },
+    close: async () => {
+      await closeServer(server)
+      for (const dispose of disposers) dispose()
+    },
+  }
+}
+
+test('live routes follow settings without re-registering, and answer 404 while disabled', async () => {
+  const upstream = await startUpstream()
+  const base = 'http://127.0.0.1:' + upstream.port + '/v1'
+  const host = await startLiveHost({ enabled: false, openai: { baseUrl: base, apiKeyEnv: '' } })
+  try {
+    assert.equal(host.routes.size, 2, 'both routes are registered even while disabled')
+    assert.equal((await fetch(host.url + '/dsh-tts/state')).status, 404)
+    assert.equal((await speak(host.url, { text: 'hello' })).status, 404)
+    host.set({ enabled: true, openai: { baseUrl: base, apiKeyEnv: '', model: 'a' }, stream: { pcmSampleRate: 44100 } })
+    const state = await (await fetch(host.url + '/dsh-tts/state')).json()
+    assert.equal(state.enabled, true)
+    assert.equal(state.pcmSampleRate, 44100)
+    await (await speak(host.url, { text: 'live' })).arrayBuffer()
+    assert.equal(upstream.stats.bodies.at(-1).model, 'a')
+    host.set({ enabled: true, openai: { baseUrl: base, apiKeyEnv: '', model: 'b' } })
+    await (await speak(host.url, { text: 'live' })).arrayBuffer()
+    assert.equal(upstream.stats.bodies.at(-1).model, 'b', 'a changed model is not served from the old cache entry')
+    host.set({ enabled: true, openai: { baseUrl: '', apiKeyEnv: '' } })
+    assert.equal((await (await fetch(host.url + '/dsh-tts/state')).json()).enabled, false, 'no URL keeps the client detached')
+    assert.equal((await speak(host.url, { text: 'nowhere' })).status, 503)
+    host.set({ enabled: true, openai: { baseUrl: 'ftp://bad' } })
+    const broken = await (await fetch(host.url + '/dsh-tts/state')).json()
+    assert.equal(broken.enabled, false)
+    assert.match(broken.error, /openai\.baseUrl/)
+  } finally {
+    await host.close()
+    await upstream.close()
+  }
+})
+
+test('the key comes from the credential store before the environment', async () => {
+  process.env[KEY_ENV] = 'env-key'
+  const upstream = await startUpstream()
+  const base = 'http://127.0.0.1:' + upstream.port + '/v1'
+  const stored = new Map([[KEY_ENV, 'stored-key']])
+  const credentials = { async resolve(name) { return stored.has(name) ? { value: stored.get(name), source: 'store' } : undefined } }
+  const host = await startLiveHost({ enabled: true, openai: { baseUrl: base, apiKeyEnv: KEY_ENV } }, { get: (name) => (name === 'credentials' ? credentials : undefined) })
+  try {
+    await (await speak(host.url, { text: 'one' })).arrayBuffer()
+    assert.equal(upstream.stats.authorizations.at(-1), 'Bearer stored-key')
+    stored.delete(KEY_ENV)
+    const missing = await speak(host.url, { text: 'two' })
+    assert.equal(missing.status, 503, 'with a store present, its answer is authoritative')
+    assert.match((await missing.json()).error.message, new RegExp(KEY_ENV))
+  } finally {
+    await host.close()
+    await upstream.close()
+    delete process.env[KEY_ENV]
   }
 })

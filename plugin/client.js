@@ -268,6 +268,178 @@ function createUpdater({ fetch: fetchImpl = (...args) => window.fetch(...args), 
   }
 }
 
+// ---------- 말풍선 음성 (TTS) ----------
+// 재생·입 모양 코드는 plugins/dsh-tts/src/client 원본을 빌드 때 그대로 넣는다.
+/* TTS_CLIENT */
+
+const DEFAULT_KEY_REF = 'DSH_TTS_API_KEY'
+
+// 이 기능이 붙어 있는 동안만 dsc:say를 듣는다. 늦게 끝난 초기화는 feature.add가 바로 정리한다.
+function mountTts(feature) {
+  createTtsClient().apply({ effect: (fn) => feature.add(fn()) })
+    .catch((error) => console.warn('DeepSeek짱 음성:', error))
+}
+
+// 설정이 바뀌면 다시 붙일지 정하는 값. 캐릭터가 꺼져 있으면 읽을 말풍선이 없다.
+function ttsSignature(value) {
+  const tts = value.tts
+  if (value.character === false || tts?.enabled !== true || !tts.openai?.baseUrl) return null
+  return JSON.stringify([tts.openai.baseUrl, tts.stream?.pcmSampleRate, tts.voiceLines])
+}
+
+// API 키는 Harness credentials에 저장한다. 화면은 "설정됨" 여부만 알고 값은 받지 않는다.
+function createKeyStore() {
+  const listeners = new Set()
+  let remote = null, ref = DEFAULT_KEY_REF, generation = 0
+  let snapshot = { available: false, configured: false, source: null }
+  const set = (next) => { snapshot = next; for (const fn of [...listeners]) fn() }
+  const refresh = async () => {
+    const mine = ++generation
+    if (!remote || !ref) { set({ available: !!remote, configured: false, source: null }); return }
+    try {
+      const response = await remote.describe([ref])
+      if (mine !== generation) return
+      const view = response?.ok ? response.value?.[ref] : undefined
+      set({ available: true, configured: view?.configured === true, source: view?.source ?? null })
+    } catch { if (mine === generation) set({ available: true, configured: false, source: null }) }
+  }
+  return {
+    subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn) },
+    getSnapshot: () => snapshot,
+    get ref() { return ref },
+    setRef(next) { const name = typeof next === 'string' ? next : DEFAULT_KEY_REF; if (name !== ref) { ref = name; refresh() } },
+    attach(next) { remote = next; refresh() },
+    detach() { remote = null; generation++; set({ available: false, configured: false, source: null }) },
+    changed(name) { if (name === ref) refresh() },
+    async save(value) {
+      if (!remote || !ref) return false
+      const response = await remote.set(ref, value)
+      await refresh()
+      return response?.ok !== false
+    },
+  }
+}
+
+const sectionStyle = { display: 'grid', gap: 10, borderTop: '1px solid rgba(127,127,127,.25)', paddingTop: 14 }
+const fieldStyle = { display: 'grid', gap: 4 }
+const inputStyle = { width: '100%', boxSizing: 'border-box' }
+
+// 입력 중에는 초안을 들고 있다가, 포커스를 벗어나거나 Enter를 누르면 저장한다.
+function TtsField({ label, hint, value, placeholder, disabled, multiline, type, commit }) {
+  const shown = value ?? ''
+  const [draft, setDraft] = React.useState(shown)
+  const [error, setError] = React.useState('')
+  React.useEffect(() => { setDraft(shown); setError('') }, [shown])
+  const save = async () => {
+    if (draft === shown) return
+    const problem = await commit(draft)
+    setError(problem || '')
+  }
+  const onKeyDown = (event) => { if (!multiline && event.key === 'Enter') event.currentTarget.blur() }
+  const input = React.createElement(multiline ? 'textarea' : 'input', {
+    style: inputStyle, value: draft, placeholder, disabled, type: multiline ? undefined : (type || 'text'), rows: multiline ? 3 : undefined,
+    spellCheck: false, onChange: (event) => setDraft(event.target.value), onBlur: save, onKeyDown,
+  })
+  return React.createElement('label', { style: fieldStyle },
+    React.createElement('span', null, label),
+    input,
+    hint ? React.createElement('small', { style: { opacity: 0.7 } }, hint) : null,
+    error ? React.createElement('small', { role: 'alert' }, error) : null)
+}
+
+// JSON 칸: 객체만 받는다. 빈 칸은 {}.
+function parseJsonObject(text, ko) {
+  const trimmed = text.trim()
+  if (trimmed === '') return { value: {} }
+  try {
+    const value = JSON.parse(trimmed)
+    if (value && typeof value === 'object' && !Array.isArray(value)) return { value }
+  } catch {}
+  return { error: ko ? '{ "이름": 값 } 형태의 JSON 객체를 넣어 주세요.' : 'Enter a JSON object such as { "name": value }.' }
+}
+
+function TtsKeyField({ keys, ko, disabled }) {
+  const key = React.useSyncExternalStore((fn) => keys.subscribe(fn), () => keys.getSnapshot(), () => keys.getSnapshot())
+  const [draft, setDraft] = React.useState('')
+  const [message, setMessage] = React.useState('')
+  const t = (k, e) => (ko ? k : e)
+  const status = !key.available ? t('Harness 자격 증명 저장소에 연결되지 않았습니다.', 'The Harness credential store is unavailable.')
+    : key.configured ? t('저장됨', 'Saved') + (key.source ? ' (' + key.source + ')' : '')
+      : t('저장된 키가 없습니다. 키가 필요 없는 로컬 서버라면 비워 두세요.', 'No key saved. Leave empty for local servers that need none.')
+  const save = async () => {
+    if (!draft.trim()) return
+    setMessage('')
+    try { setMessage(await keys.save(draft.trim()) ? '' : t('키를 저장하지 못했습니다.', 'Could not save the key.')) } catch { setMessage(t('키를 저장하지 못했습니다.', 'Could not save the key.')) }
+    setDraft('')
+  }
+  return React.createElement('label', { style: fieldStyle },
+    React.createElement('span', null, t('API 키', 'API key')),
+    React.createElement('div', { style: { display: 'flex', gap: 8 } },
+      React.createElement('input', { type: 'password', autoComplete: 'off', style: inputStyle, value: draft, disabled: disabled || !key.available || !keys.ref, placeholder: key.configured ? '••••••••' : '', onChange: (event) => setDraft(event.target.value) }),
+      React.createElement('button', { type: 'button', disabled: disabled || !key.available || !draft.trim(), onClick: save }, t('저장', 'Save'))),
+    React.createElement('small', { role: 'status', style: { opacity: 0.7 } }, status),
+    message ? React.createElement('small', { role: 'alert' }, message) : null)
+}
+
+const VOICE_LINES = [
+  ['reactions', '반응 (인사·시작·완료·오류)', 'Reactions (greeting, start, done, error)'],
+  ['status', '도구 사용 상태', 'Tool status'],
+  ['mutters', '혼잣말 (모델 추론 요약이 섞일 수 있음)', 'Mutters (may include reasoning summaries)'],
+  ['others', '그 밖의 대사 (터치 반응 등)', 'Other lines (touch reactions, …)'],
+]
+
+function TtsSection({ form, keys, ko, writable, tts }) {
+  const [error, setError] = React.useState('')
+  const t = (k, e) => (ko ? k : e)
+  const v = tts ?? {}, openai = v.openai ?? {}
+  const off = !writable || typeof form.mutate !== 'function'
+  const write = async (path, value) => {
+    setError('')
+    try {
+      if (await form.mutate([{ op: 'set', path: ['tts', ...path], value }])) return ''
+    } catch {}
+    const failed = t('설정을 저장하지 못했습니다.', 'Could not save settings.')
+    setError(failed)
+    return failed
+  }
+  const text = (path, label, extra = {}) => React.createElement(TtsField, { key: path.join('.'), label, disabled: off, commit: (draft) => write(path, draft.trim()), ...extra })
+  const json = (path, label, value, placeholder) => text(path, label, {
+    multiline: true, placeholder, value: value && Object.keys(value).length ? JSON.stringify(value, null, 2) : '',
+    commit: (draft) => { const parsed = parseJsonObject(draft, ko); return parsed.error ? parsed.error : write(path, parsed.value) },
+  })
+  const number = (path, label, value, min, extra = {}) => text(path, label, {
+    type: 'number', value: value === undefined ? '' : String(value), ...extra,
+    commit: (draft) => { const n = Number(draft); return Number.isInteger(n) && n >= min ? write(path, n) : t(min + ' 이상의 정수를 넣어 주세요.', 'Enter a whole number of at least ' + min + '.') },
+  })
+  const check = (path, label, checked) => React.createElement('label', { key: path.join('.'), style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 24 } },
+    React.createElement('span', null, label),
+    React.createElement('input', { type: 'checkbox', checked, disabled: off, onChange: (event) => write(path, event.target.checked) }))
+  return React.createElement('section', { 'aria-label': t('말풍선 음성', 'Speech bubble voice'), style: sectionStyle },
+    React.createElement('strong', null, t('말풍선 음성', 'Speech bubble voice')),
+    check(['enabled'], t('말풍선을 소리 내어 읽기', 'Read speech bubbles aloud'), v.enabled === true),
+    v.enabled === true && !openai.baseUrl ? React.createElement('p', { role: 'status', style: { margin: 0 } }, t('URL을 넣어야 소리가 납니다.', 'Enter a URL to hear speech.')) : null,
+    text(['openai', 'baseUrl'], 'URL', { value: openai.baseUrl, placeholder: 'https://api.openai.com/v1', hint: t('OpenAI 호환 /audio/speech 를 제공하는 주소', 'An OpenAI-compatible endpoint serving /audio/speech') }),
+    React.createElement(TtsKeyField, { key: 'key', keys, ko, disabled: off }),
+    text(['openai', 'model'], t('모델', 'Model'), { value: openai.model, placeholder: t('비우면 서버 기본값', 'Empty = server default') }),
+    text(['openai', 'voice'], t('보이스', 'Voice'), { value: openai.voice, placeholder: t('비우면 서버 기본값', 'Empty = server default') }),
+    number(['stream', 'pcmSampleRate'], t('샘플레이트 (Hz)', 'Sample rate (Hz)'), v.stream?.pcmSampleRate, 8000, { hint: t('서버가 보내는 PCM과 같아야 합니다. OpenAI 24000 · Fish 44100(또는 추가 파라미터에 "sample_rate": 24000)', 'Must match the PCM the server sends. OpenAI 24000 · Fish 44100 (or "sample_rate": 24000 in extra parameters)') }),
+    json(['openai', 'extraBody'], t('추가 파라미터 (JSON)', 'Extra parameters (JSON)'), openai.extraBody, '{ "speed": 1.1 }'),
+    React.createElement('small', { style: { opacity: 0.7 } }, t('input · response_format · stream_format은 플러그인이 정하고, 위 칸에 넣은 모델·보이스가 JSON보다 우선합니다.', 'The plugin sets input, response_format and stream_format; the model and voice above win over the JSON.')),
+    React.createElement('div', { style: { display: 'grid', gap: 6 } },
+      React.createElement('span', null, t('읽을 대사', 'Lines to read')),
+      ...VOICE_LINES.map(([field, koLabel, enLabel]) => check(['voiceLines', field], ko ? koLabel : enLabel, v.voiceLines?.[field] === true))),
+    React.createElement('details', null,
+      React.createElement('summary', null, t('고급', 'Advanced')),
+      React.createElement('div', { style: { display: 'grid', gap: 10, paddingTop: 10 } },
+        json(['openai', 'headers'], t('추가 헤더 (JSON)', 'Extra headers (JSON)'), openai.headers, '{ "X-Example": "value" }'),
+        text(['openai', 'textPrefix'], t('대사 앞 문구', 'Line prefix'), { value: openai.textPrefix, placeholder: '[밝고 장난스럽게] ', hint: t('모든 대사 앞에 붙습니다(예: Drama 3 연기 지시).', 'Prepended to every line (e.g. Drama 3 directions).') }),
+        number(['openai', 'timeoutMs'], t('요청 제한 시간 (ms)', 'Request timeout (ms)'), openai.timeoutMs, 1000),
+        check(['cache', 'enabled'], t('같은 대사는 다시 요청하지 않기 (캐시)', 'Reuse audio for repeated lines (cache)'), v.cache?.enabled !== false),
+        text(['openai', 'apiKeyEnv'], t('키 참조 이름', 'Key reference name'), { value: openai.apiKeyEnv ?? DEFAULT_KEY_REF, hint: t('저장된 키를 먼저 쓰고, 없으면 같은 이름의 환경변수를 씁니다. 비우면 인증 없이 요청합니다.', 'A saved key is used first, then the environment variable of the same name. Empty sends no authorization.') }))),
+    React.createElement('p', { style: { margin: 0, opacity: 0.7 } }, t('AI가 만든 음성입니다. 켜면 말풍선 대사가 위 URL로 전송되고, 사용하는 서비스에 따라 요금이 나올 수 있습니다.', 'This is an AI-generated voice. When on, bubble lines are sent to the URL above, and the service may charge for them.')),
+    error ? React.createElement('p', { role: 'alert' }, error) : null)
+}
+
 function updateSection(updater, ko) {
   const s = updater.getSnapshot()
   const t = (k, e) => (ko ? k : e)
@@ -301,7 +473,7 @@ function updateSection(updater, ko) {
         ? button(t('다시 확인', 'Check again'), () => updater.check(), busy) : null))
 }
 
-function settingsPage(ctx, form, updater) {
+function settingsPage(ctx, form, updater, keys) {
   return function FeatureSettings({ view }) {
     const state = React.useSyncExternalStore((fn) => form.subscribe(fn), () => form.getSnapshot(), () => form.getSnapshot())
     const locale = React.useSyncExternalStore((fn) => ctx.locale.subscribe(fn), () => ctx.locale.getLocale(), () => ctx.locale.getLocale())
@@ -343,6 +515,7 @@ function settingsPage(ctx, form, updater) {
           React.createElement('input', { type: 'radio', name: 'deepseek-harness-kr-body', checked: bodyType === value, disabled: off, onChange: () => change('bodyType', value) }),
           React.createElement('span', null, ko ? koLabel : enLabel)))),
       error ? React.createElement('p', { role: 'alert' }, error) : null,
+      React.createElement(TtsSection, { form, keys, ko, writable: state.writable, tts: state.value?.tts }),
       updateSection(updater, ko))
   }
 }
@@ -369,14 +542,30 @@ function apply(ctx) {
   try {
     const form = ctx.configForms.get(ENTRY_ID)
     const updater = createUpdater()
+    const keys = createKeyStore()
     // 플러그인 관리자는 선택적으로 연결: 없어도 캐릭터·테마·번역은 그대로 동작한다.
     if (typeof ctx.inject === 'function') {
       ctx.inject(['remote', 'remote.pluginManager'], (scope) => {
         updater.attach(scope.remote.pluginManager)
         scope.effect(() => () => updater.detach(), 'deepseek-harness-kr: updater')
       })
+      // 음성 API 키 저장소도 선택적: 없으면 키 칸만 비활성화된다.
+      ctx.inject(['remote', 'remote.credentials'], (scope) => {
+        keys.attach(scope.remote.credentials)
+        const off = typeof scope.remote.$on === 'function' ? scope.remote.$on('credentials/reference-updated', (ref) => keys.changed(ref)) : null
+        scope.effect(() => () => { off?.(); keys.detach() }, 'deepseek-harness-kr: voice key')
+      })
     }
     life.add(() => updater.detach())
+    life.add(() => keys.detach())
+    let ttsKey = null
+    const syncTts = (value) => {
+      const next = ttsSignature(value)
+      if (next === ttsKey) return
+      ttsKey = next
+      reconcile('tts', false)
+      if (next !== null) reconcile('tts', true, mountTts)
+    }
     const sync = () => {
       const snapshot = form.getSnapshot()
       if (snapshot.status !== 'ready') return
@@ -387,12 +576,14 @@ function apply(ctx) {
       reconcile('character', value.character !== false, startCharacter)
       // 캐릭터는 매 프레임 이 값을 읽어 소품·옷·체형을 바로 바꾼다 (다시 띄우지 않음)
       window.__dscOutfit = Object.fromEntries([...OUTFIT_FIELDS.map(([field]) => [field, value[field] === true]), ['bodyType', value.bodyType || 'default']])
+      keys.setRef(value.tts?.openai?.apiKeyEnv ?? DEFAULT_KEY_REF)
+      syncTts(value)
     }
     life.add(() => { delete window.__dscOutfit })
     life.add(form.subscribe(sync))
     life.add(ctx.slots.inject('plugins.row.config', () => ctx.slots.register({
       name: 'plugins.row.config', key: PLUGIN_ID + '#' + ENTRY_ID,
-    }, settingsPage(ctx, form, updater))))
+    }, settingsPage(ctx, form, updater, keys))))
     sync()
   } catch (error) { dispose(); throw error }
 }
@@ -400,4 +591,4 @@ function apply(ctx) {
 exports.inject = ['locale', 'theme', 'configForms', 'slots']
 exports.apply = apply
 // 테스트용
-exports.internals = { githubSource, compareVersions, createUpdater }
+exports.internals = { githubSource, compareVersions, createUpdater, createKeyStore, ttsSignature, parseJsonObject }

@@ -12,6 +12,10 @@
   },
   "files": [
     "plugin/host.js",
+    "plugins/dsh-tts/src/cache.js",
+    "plugins/dsh-tts/src/config.js",
+    "plugins/dsh-tts/src/host.js",
+    "plugins/dsh-tts/src/index.js",
     "lib/client.js",
     "assets/",
     "cordis.patch.yml",

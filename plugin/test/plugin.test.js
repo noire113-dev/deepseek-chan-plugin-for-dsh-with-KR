@@ -10,7 +10,7 @@ import { join, resolve } from 'node:path'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { JSDOM } from 'jsdom'
-import { apply as hostApply, createAssetHandler, ASSET_PATH } from '../host.js'
+import { apply as hostApply, createAssetHandler, ASSET_PATH, Config, readLive } from '../host.js'
 
 const packageName = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8')).name
 const bundle = await readFile(new URL('../../lib/client.js', import.meta.url), 'utf8')
@@ -31,11 +31,21 @@ function clientHarness(initial = {}, status = 'ready') {
   let selected = 'en'
   const subscriptions = new Set(), pages = new Map()
   let snapshot = { status, value: initial, writable: true, revision: 0 }
+  const mutations = []
   const form = {
     getSnapshot: () => snapshot,
     subscribe(fn) { subscriptions.add(fn); return () => subscriptions.delete(fn) },
     update(value, status = 'ready') { snapshot = { ...snapshot, status, value, revision: snapshot.revision + 1 }; for (const fn of [...subscriptions]) fn() },
     async set(field, value) { form.update({ ...snapshot.value, [field]: value }); return true },
+    async mutate(ops) {
+      const next = structuredClone(snapshot.value ?? {})
+      for (const op of ops) {
+        mutations.push(op)
+        const parent = op.path.slice(0, -1).reduce((node, key) => (node[key] ??= {}), next)
+        parent[op.path.at(-1)] = op.value
+      }
+      form.update(next); return true
+    },
   }
   const ctx = () => {
     const cleanups = []
@@ -65,7 +75,7 @@ function clientHarness(initial = {}, status = 'ready') {
       dispose() { for (const cleanup of cleanups.reverse()) cleanup() },
     }
   }
-  return { dom, client, ctx, languages, dictionaries, resolveModel, form, pages, get appCreated() { return appCreated }, get appDestroyed() { return appDestroyed }, get selected() { return selected } }
+  return { dom, client, ctx, languages, dictionaries, resolveModel, form, mutations, pages, get appCreated() { return appCreated }, get appDestroyed() { return appDestroyed }, get selected() { return selected } }
 }
 
 test('client registers Korean independently, mounts once, and rolls back on disable during model load', async () => {
@@ -138,10 +148,12 @@ test('Host asset route serves only its files and unregisters with the plugin', a
     assert.equal((await fetch(url + ASSET_PATH + '/..%5coutside.json')).status, 404)
     assert.equal((await fetch(url + ASSET_PATH + '/model.json', { method: 'POST' })).status, 405)
     assert.equal((await fetch(url + ASSET_PATH + '/%zz')).status, 400)
-    let registration, released = false, dispose
-    hostApply({ effect(fn) { dispose = fn() }, webServer: { register(route) { registration = route; return () => { released = true } } } })
-    assert.equal(registration.path, ASSET_PATH)
-    dispose(); assert(released)
+    const registrations = new Map(), disposers = []
+    hostApply({ effect(fn) { disposers.push(fn()) }, webServer: { register(route) { registrations.set(route.path, route); return () => registrations.delete(route.path) } } })
+    assert.equal(registrations.get(ASSET_PATH).kind, 'prefix')
+    assert.deepEqual([...registrations.keys()].sort(), [ASSET_PATH, '/dsh-tts/speak', '/dsh-tts/state'].sort())
+    for (const dispose of disposers) dispose()
+    assert.equal(registrations.size, 0)
   } finally {
     if (server) { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)) }
     assert(resolve(root).startsWith(resolve(tmpdir()) + '\\') || resolve(root).startsWith(resolve(tmpdir()) + '/'))
@@ -383,4 +395,135 @@ test('settings page shows the update section and still works without the plugin 
     assert.equal((html.match(/role="switch"/g) || []).length, 3)
     ctx.dispose()
   } finally { h.dom.window.close() }
+})
+
+// ---------- 말풍선 음성 (TTS) ----------
+
+test('voice settings default to off with no endpoint, model or voice', () => {
+  const tts = readLive(Config({}).tts)
+  assert.equal(tts.enabled, false)
+  assert.deepEqual([tts.openai.baseUrl, tts.openai.model, tts.openai.voice], ['', '', ''])
+  assert.equal(tts.openai.apiKeyEnv, 'DSH_TTS_API_KEY')
+  assert.equal(tts.stream.pcmSampleRate, 24000)
+  assert.deepEqual(tts.voiceLines, { reactions: true, status: false, mutters: false, others: true })
+})
+
+test('Host speech routes read live settings and stay 404 while disabled', async () => {
+  const live = (value) => ({ get: () => value, set(next) { value = next } })
+  const enabled = live(false), baseUrl = live(''), rate = live(24000)
+  const routes = new Map()
+  hostApply({ effect(fn) { fn() }, webServer: { register(route) { routes.set(route.path, route.handler); return () => {} } } },
+    { tts: { enabled, openai: { baseUrl, apiKeyEnv: live('') }, stream: { pcmSampleRate: rate } } })
+  const server = createServer((req, res) => (routes.get(req.url) ?? ((_, r) => r.writeHead(404).end()))(req, res))
+  server.listen(0, '127.0.0.1'); await once(server, 'listening')
+  const url = 'http://127.0.0.1:' + server.address().port
+  try {
+    assert.equal((await fetch(url + '/dsh-tts/state')).status, 404)
+    enabled.set(true)
+    assert.equal((await (await fetch(url + '/dsh-tts/state')).json()).enabled, false, 'on without a URL stays detached')
+    baseUrl.set('http://127.0.0.1:9/v1'); rate.set(44100)
+    assert.deepEqual(await (await fetch(url + '/dsh-tts/state')).json(), { enabled: true, pcmSampleRate: 44100, voiceLines: { reactions: true, status: false, mutters: false, others: true } })
+  } finally { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)) }
+})
+
+function voiceFetch(h) {
+  const calls = []
+  h.dom.window.fetch = async (url, init) => {
+    calls.push(init?.body ? [url, JSON.parse(init.body).text] : [url])
+    if (url === '/dsh-tts/state') return { ok: true, status: 200, json: async () => ({ enabled: true, pcmSampleRate: 24000, voiceLines: { reactions: true, others: true } }) }
+    return { ok: false, status: 503, body: null }
+  }
+  return calls
+}
+
+test('voice attaches with the character, a URL and the switch, and follows setting changes', async () => {
+  const h = clientHarness({ tts: { enabled: false, openai: { baseUrl: 'http://tts/v1' } } })
+  try {
+    const calls = voiceFetch(h)
+    const ctx = h.ctx(); h.client.apply(ctx)
+    const say = (text) => h.dom.window.dispatchEvent(new h.dom.window.CustomEvent('dsc:say', { detail: { text, ms: 0, kind: 'reaction' } }))
+    await settle()
+    assert.equal(calls.length, 0, 'nothing is requested while the switch is off')
+    await h.form.mutate([{ op: 'set', path: ['tts', 'enabled'], value: true }])
+    await settle()
+    assert.deepEqual(calls, [['/dsh-tts/state']])
+    say('안녕'); await settle()
+    assert.deepEqual(calls.at(-1), ['/dsh-tts/speak', '안녕'])
+    await h.form.mutate([{ op: 'set', path: ['tts', 'stream', 'pcmSampleRate'], value: 44100 }])
+    await settle()
+    assert.equal(calls.filter(([url]) => url === '/dsh-tts/state').length, 2, 'a playback setting change re-reads the state')
+    await h.form.mutate([{ op: 'set', path: ['tts', 'openai', 'model'], value: 'x' }])
+    await settle()
+    assert.equal(calls.filter(([url]) => url === '/dsh-tts/state').length, 2, 'request-only settings need no reattach')
+    await h.form.set('character', false)
+    const before = calls.length
+    say('들리면 안 됨'); await settle()
+    assert.equal(calls.length, before, 'no character, no voice')
+    ctx.dispose()
+  } finally { h.dom.window.close() }
+})
+
+test('voice disposed before its state arrives never starts listening', async () => {
+  const h = clientHarness({ tts: { enabled: true, openai: { baseUrl: 'http://tts/v1' } } })
+  try {
+    let release
+    const calls = []
+    h.dom.window.fetch = (url) => { calls.push(url); return url === '/dsh-tts/state' ? new Promise((resolve) => { release = resolve }) : Promise.resolve({ ok: false, status: 503, body: null }) }
+    const ctx = h.ctx(); h.client.apply(ctx)
+    ctx.dispose()
+    release({ ok: true, status: 200, json: async () => ({ enabled: true, pcmSampleRate: 24000, voiceLines: { reactions: true } }) })
+    await settle(); await settle()
+    h.dom.window.dispatchEvent(new h.dom.window.CustomEvent('dsc:say', { detail: { text: 'late', ms: 0, kind: 'reaction' } }))
+    await settle()
+    assert.deepEqual(calls, ['/dsh-tts/state'])
+  } finally { h.dom.window.close() }
+})
+
+test('settings page shows the voice section without needing a YAML edit', () => {
+  const h = clientHarness({ tts: { enabled: true, openai: { baseUrl: '', extraBody: { speed: 1.1 } } } })
+  try {
+    const ctx = h.ctx(); h.client.apply(ctx)
+    const Page = h.pages.get(packageName + '#deepseek-harness-kr')
+    const html = renderToStaticMarkup(React.createElement(Page, { view: 'page' }))
+    assert.match(html, /aria-label="Speech bubble voice"/)
+    for (const label of ['Read speech bubbles aloud', 'URL', 'API key', 'Model', 'Voice', 'Sample rate \\(Hz\\)', 'Extra parameters \\(JSON\\)', 'Lines to read', 'Advanced', 'Extra headers \\(JSON\\)', 'Line prefix', 'Request timeout \\(ms\\)', 'Key reference name']) assert.match(html, new RegExp(label))
+    assert.match(html, /Enter a URL to hear speech/)
+    assert.match(html, /&quot;speed&quot;: 1.1/)
+    assert.match(html, /AI-generated voice/)
+    assert.match(html, /credential store is unavailable/)
+    assert.match(html, /type="password"/)
+    assert.equal((html.match(/role="switch"/g) || []).length, 3, 'feature switches are unchanged')
+    ctx.dispose()
+  } finally { h.dom.window.close() }
+})
+
+test('voice helpers: JSON objects only, attach signature, and a key store that never holds the value', async () => {
+  const h = clientHarness(); after(() => h.dom.window.close())
+  const { parseJsonObject, ttsSignature, createKeyStore } = h.client.internals
+  assert.deepEqual({ ...parseJsonObject('  ', false).value }, {})
+  assert.equal(parseJsonObject('{"speed":1.2}', false).value.speed, 1.2)
+  for (const bad of ['[1]', '"x"', '{bad', 'null']) assert.ok(parseJsonObject(bad, false).error, bad)
+  const on = { tts: { enabled: true, openai: { baseUrl: 'http://a' } } }
+  assert.notEqual(ttsSignature(on), null)
+  assert.equal(ttsSignature({ ...on, character: false }), null)
+  assert.equal(ttsSignature({ tts: { enabled: true, openai: { baseUrl: '' } } }), null)
+  assert.equal(ttsSignature({ tts: { ...on.tts, enabled: false } }), null)
+  const stored = new Map()
+  const remote = {
+    async describe(refs) { return { ok: true, value: Object.fromEntries(refs.map((ref) => [ref, { configured: stored.has(ref), source: stored.has(ref) ? 'store' : undefined, writable: true }])) } },
+    async set(ref, value) { stored.set(ref, value); return { ok: true } },
+  }
+  const keys = createKeyStore()
+  assert.equal(keys.getSnapshot().available, false)
+  assert.equal(await keys.save('sk-1'), false, 'no store, nothing saved')
+  keys.attach(remote); await settle()
+  assert.equal(keys.getSnapshot().configured, false)
+  assert.equal(await keys.save('sk-secret'), true)
+  assert.deepEqual({ ...keys.getSnapshot() }, { available: true, configured: true, source: 'store' })
+  assert.equal(stored.get('DSH_TTS_API_KEY'), 'sk-secret')
+  assert.doesNotMatch(JSON.stringify(keys.getSnapshot()), /sk-secret/)
+  keys.setRef('OTHER_KEY'); await settle()
+  assert.equal(keys.getSnapshot().configured, false)
+  keys.detach()
+  assert.equal(keys.getSnapshot().available, false)
 })

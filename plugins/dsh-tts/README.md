@@ -4,18 +4,28 @@
 현재 입은 **오디오 레벨(RMS) 기반 근사**로 움직이며, 정밀 립싱크(음소 단위 동기화)는 TODO입니다.
 에이전트 응답 낭독·페르소나·감정 태그·STT는 다루지 않습니다.
 
-- **Host**: `GET /dsh-tts/state`, `POST /dsh-tts/speak` — 표준 OpenAI 호환 `/audio/speech`로 스트리밍 중계. API 키는 호스트 환경변수에만 있습니다.
+- **Host**: `GET /dsh-tts/state`, `POST /dsh-tts/speak` — 표준 OpenAI 호환 `/audio/speech`로 스트리밍 중계. API 키는 호스트에서만 읽고 브라우저로 넘기지 않습니다.
 - **Client** (`lib/client.js`, 빌드 산출물 커밋됨): `dsc:say` 이벤트를 듣고 PCM16을 첫 청크부터 재생, Analyser RMS로 `window.__dsc.voice({ speaking, level, until })`를 갱신합니다.
 - **말풍선 타이밍은 TTS와 무관**: 꺼짐/오류/지연이면 `voice(null)`일 뿐 dsc.js의 숨김 타이머는 그대로입니다.
 
-## 옵트인
+## deepseek-harness-kr에 포함 (0.1.5부터)
 
-기본값은 `enabled: false`입니다. 꺼져 있으면 **라우트가 등록되지 않고**(/state도 404), 클라이언트는 아무것도 붙이지 않으며 외부 요청을 보내지 않습니다.
+kr 플러그인이 이 디렉터리의 `src/`를 그대로 가져다 씁니다. kr 설정 창의 **말풍선 음성**에서 켜고 URL·API 키·모델·보이스·샘플레이트·추가 파라미터(JSON)를 넣습니다.
 
-켜려면 `cordis.patch.yml` config에서 `enabled: true`로 바꾸고 키를 환경변수로 노출하세요:
+- 설정 값은 kr 설정의 `tts` 아래에 아래와 같은 모양으로 저장되며(모두 volatile), 호스트가 요청마다 다시 읽어 저장 즉시 적용됩니다. 꺼져 있으면 두 라우트는 404로 답합니다.
+- API 키는 Harness 자격 증명 저장소에 `apiKeyEnv` 이름으로 저장됩니다. 호스트는 저장된 키를 먼저 쓰고, 없으면 같은 이름의 환경변수를 씁니다.
+- 브라우저 쪽은 kr 빌드(`plugin/build.mjs`)가 `src/client/`를 kr 번들에 넣습니다.
+
+아래 단독 사용은 kr 없이 이 플러그인만 쓰는 경우입니다. kr과 함께 켜면 같은 라우트가 두 번 등록되므로 둘 중 하나만 쓰세요.
+
+## 옵트인 (단독 사용)
+
+기본값은 `enabled: false`입니다. 꺼져 있으면 **라우트가 등록되지 않고**(/state도 404), 클라이언트는 아무것도 붙이지 않으며 외부 요청을 보내지 않습니다. `baseUrl`이 비어 있어도 클라이언트는 붙지 않습니다.
+
+켜려면 `cordis.patch.yml` config에서 `enabled: true`와 `openai.baseUrl`을 넣고, 키를 `apiKeyEnv` 이름의 환경변수(또는 Harness 자격 증명 저장소)에 둡니다:
 
 ```bash
-export OPENAI_API_KEY=sk-...
+export DSH_TTS_API_KEY=sk-...
 ```
 
 ## 설정 (기본값)
@@ -23,11 +33,11 @@ export OPENAI_API_KEY=sk-...
 ```yaml
 enabled: false
 openai:
-  baseUrl: "https://api.openai.com/v1"
-  model: "gpt-4o-mini-tts"
-  voice: "alloy"
+  baseUrl: ""                # 비어 있으면 동작하지 않음. 예: https://api.openai.com/v1
+  model: ""                  # 비우면 요청에서 빼고 서버 기본값 사용
+  voice: ""                  # 비우면 요청에서 빼고 서버 기본값 사용
   speed: 1.0                 # 1.0이면 요청에서 생략
-  apiKeyEnv: "OPENAI_API_KEY"  # ""이면 인증 없이 요청(무인증 로컬 서버)
+  apiKeyEnv: "DSH_TTS_API_KEY" # 자격 증명 참조 이름(저장된 키 → 같은 이름의 환경변수). ""이면 인증 없이 요청
   headers: {}                # 업스트림 추가 헤더 (Authorization은 덮어쓸 수 없음)
   timeoutMs: 30000
   extraBody: {}              # 모델 전용 필드(비이식성). 예: Drama 3 ref_audio/ref_text. 표준 필드가 우선
@@ -77,14 +87,18 @@ limits:
 | 상황 | 응답 |
 |---|---|
 | 잘못된 JSON / 빈 텍스트 / `maxCharsPerLine` 초과 | 400 `{error:{message}}` |
-| `apiKeyEnv`(비어 있지 않음)인데 해당 env가 없음/빈 값 | 503 `{error:{message}}` |
+| `baseUrl`이 비어 있음 | 503 `{error:{message}}` |
+| `apiKeyEnv`(비어 있지 않음)인데 저장된 키·같은 이름의 env 모두 없음/빈 값 | 503 `{error:{message}}` |
 | 캐시 hit | 200 `audio/pcm`, `cache-control: no-store`, `x-cache: hit` |
 | 캐시 miss | 200 `audio/pcm` 스트리밍, `x-cache: miss` |
 | 업스트림 비 2xx | 그 상태코드 + JSON `{error:{message}}` (오디오 헤더 전에) |
-| 플러그인 disabled | 404 (라우트 미등록) |
+| 플러그인 disabled | 404 (단독: 라우트 미등록 · kr 포함: 라우트가 404로 답함) |
 
-업스트림 요청은 표준 OpenAI 필드 `{ model, voice, input, response_format: "pcm", stream_format: "audio", speed? }` +
+`/dsh-tts/state`는 `baseUrl`이 비어 있으면 `enabled: false`를, 설정 값이 잘못되었으면 `{ enabled: false, error }`를 돌려줍니다.
+
+업스트림 요청은 표준 OpenAI 필드 `{ model?, voice?, input, response_format: "pcm", stream_format: "audio", speed? }` +
 `Authorization: Bearer`(단, `apiKeyEnv: ""`이면 생략)이며, `openai.extraBody`가 있으면 그대로 병합됩니다(표준 필드가 우선).
+`model`·`voice`가 비어 있으면 요청에서 빼므로 서버 기본값이 적용되고, 이때는 `extraBody`에 넣은 같은 이름의 값이 그대로 전달됩니다.
 `extraBody`는 **모델 전용**입니다 — 예: Drama 3의 `ref_audio`/`ref_text`/`language`/`max_new_tokens`.
 `voice`는 엔드포인트가 아는 이름(OpenAI 보이스 또는 서버에 등록된 보이스 id)이어야 하며, `default`처럼 고정되지 않은
 이름은 발화마다 화자가 바뀔 수 있습니다.

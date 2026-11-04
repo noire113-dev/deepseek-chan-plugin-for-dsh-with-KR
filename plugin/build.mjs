@@ -32,8 +32,32 @@ replace('window.__dsc = {', 'if (life.stopped) return;\n      window.__dsc = {')
 // Stop async initialization even if a fetch finishes after disable.
 replace('const weight = {}, hold = {}, until = {};', 'if (life.stopped) return;\n      const weight = {}, hold = {}, until = {};')
 const dictionaries = JSON.parse(await readFile(join(here, 'locales.ko.json'), 'utf8'))
-const adapter = await readFile(join(here, 'client.js'), 'utf8')
-const result = `window.__ModuleLoader__.load({ id: ${JSON.stringify(packageName)}, factory: (require) => {\nconst module = { exports: {} }; const exports = module.exports;\nconst PLUGIN_ID = ${JSON.stringify(packageName)};\nconst KOREAN_DICTIONARIES = ${JSON.stringify(dictionaries)};\n${adapter.replace('/* ORIGINAL_CHARACTER */', character)}\nreturn module.exports;\n} });\n`
+// 말풍선 음성(dsh-tts) 브라우저 쪽: 원본 ES 모듈 두 개를 import/export만 걷어 내 한 함수 안에 넣는다.
+const ttsDir = join(root, 'plugins/dsh-tts/src/client')
+const unexport = (source, file, edits) => {
+  let text = source.replaceAll('\r\n', '\n')
+  for (const [from, to] of edits) {
+    if (!text.includes(from)) throw new Error('dsh-tts client changed; build requires review: ' + file + ': ' + from)
+    text = text.replace(from, () => to)
+  }
+  if (/^\s*(import|export)\b/m.test(text)) throw new Error('dsh-tts client has an unhandled import/export: ' + file)
+  return text
+}
+const ttsCore = unexport(await readFile(join(ttsDir, 'core.js'), 'utf8'), 'core.js', [
+  ['export function pcm16ToFloat32', 'function pcm16ToFloat32'],
+  ['export function carryOddByte', 'function carryOddByte'],
+  ['export class ChunkScheduler', 'class ChunkScheduler'],
+])
+const ttsIndex = unexport(await readFile(join(ttsDir, 'index.js'), 'utf8'), 'index.js', [
+  ["import { ChunkScheduler, carryOddByte } from './core.js'\n", ''],
+  ['export const inject = []', 'const inject = []'],
+  ['export async function apply(ctx)', 'async function apply(ctx)'],
+])
+const ttsClient = `function createTtsClient() {\n${ttsCore}\n${ttsIndex}\nreturn { apply }\n}`
+const adapter = (await readFile(join(here, 'client.js'), 'utf8'))
+  .replace('/* ORIGINAL_CHARACTER */', () => character)
+  .replace('/* TTS_CLIENT */', () => ttsClient)
+const result = `window.__ModuleLoader__.load({ id: ${JSON.stringify(packageName)}, factory: (require) => {\nconst module = { exports: {} }; const exports = module.exports;\nconst PLUGIN_ID = ${JSON.stringify(packageName)};\nconst KOREAN_DICTIONARIES = ${JSON.stringify(dictionaries)};\n${adapter}\nreturn module.exports;\n} });\n`
 await writeFile(join(root, 'cordis.patch.yml'), `- insert:\n    - id: deepseek-harness-kr\n      name: ${JSON.stringify(packageName)}\n`)
 await mkdir(join(root, 'lib'), { recursive: true })
 await writeFile(join(root, 'lib/client.js'), result)

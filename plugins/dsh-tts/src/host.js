@@ -6,6 +6,10 @@
  * upstream answer is forwarded as JSON before any audio header goes out, so the
  * client never mistakes an error page for PCM. Nothing about the request text
  * is logged.
+ *
+ * Both handlers take either a normalized config or a function returning one,
+ * read once per request, so a settings change applies to the next line without
+ * re-registering the routes.
  * @module dsh-tts/host
  */
 import { cacheKey, createCache } from './cache.js'
@@ -18,6 +22,11 @@ export const SPEAK_ROUTE = '/dsh-tts/speak'
 
 /** Speak bodies hold one short line; this bound applies before JSON parsing. */
 const MAX_SPEAK_BODY_BYTES = 64 * 1024
+
+/** Accept a fixed config or a per-request reader. */
+function configReader(config) {
+  return typeof config === 'function' ? config : () => config
+}
 
 /** PCM response headers; no-store keeps a voice line out of any HTTP cache. */
 function pcmHeaders(cache, length) {
@@ -59,13 +68,18 @@ function readBody(req, limit) {
   })
 }
 
+/** Default key lookup without a credential store: the process environment. */
+function environmentKey(name) {
+  return process.env[name]
+}
+
 /**
  * Read the API key: '' opts out of auth (unauthenticated endpoint), null means
- * the configured env var is missing or empty.
+ * the configured reference resolves to nothing.
  */
-function readApiKey(openai) {
+async function readApiKey(openai, resolveApiKey) {
   if (openai.apiKeyEnv === '') return ''
-  const value = process.env[openai.apiKeyEnv]
+  const value = await resolveApiKey(openai.apiKeyEnv)
   if (typeof value !== 'string' || value.trim().length === 0) return null
   return value.trim()
 }
@@ -96,8 +110,9 @@ async function upstreamMessage(response) {
 export function statePayload(config) {
   const lines = config.voiceLines
   return {
-    // Streaming is the only transport, so the stream switch is a kill switch.
-    enabled: config.enabled === true && config.stream.enabled !== false,
+    // Streaming is the only transport, so the stream switch is a kill switch;
+    // without an endpoint there is nothing to speak to.
+    enabled: config.enabled === true && config.stream.enabled !== false && config.openai.baseUrl !== '',
     pcmSampleRate: config.stream.pcmSampleRate,
     voiceLines: {
       reactions: lines.reactions === true,
@@ -110,29 +125,54 @@ export function statePayload(config) {
 
 /**
  * Build the GET/HEAD state handler.
- * @param config - normalized config.
+ * @param config - normalized config, or a function returning the current one.
  * @returns the route handler.
  */
 export function createStateHandler(config) {
+  const read = configReader(config)
   return function stateHandler(req, res) {
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       sendJson(req, res, 405, { error: { message: 'use GET or HEAD' } }, { allow: 'GET, HEAD' })
       return
     }
-    sendJson(req, res, 200, statePayload(config))
+    let current
+    try {
+      current = read()
+    } catch (error) {
+      // An invalid live setting keeps the client detached and says why.
+      sendJson(req, res, 200, { enabled: false, error: String(error?.message ?? error) })
+      return
+    }
+    sendJson(req, res, 200, statePayload(current))
+  }
+}
+
+/** Standard request body; model-specific fields first so the contract wins. */
+function speechBody(openai, input) {
+  return {
+    ...openai.extraBody,
+    ...(openai.model === '' ? {} : { model: openai.model }),
+    ...(openai.voice === '' ? {} : { voice: openai.voice }),
+    input,
+    response_format: 'pcm',
+    stream_format: 'audio',
+    ...(openai.speed === 1 ? {} : { speed: openai.speed }),
   }
 }
 
 /**
  * Build the POST speak handler: cache first, then the streaming proxy.
- * @param config - normalized config.
- * @param deps - injectable fetch, now and cache for tests.
+ * @param config - normalized config, or a function returning the current one.
+ * @param deps - injectable fetch, now, cache and resolveApiKey(name) for tests
+ *   and for a credential store.
  * @returns the route handler.
  */
 export function createSpeakHandler(config, deps = {}) {
+  const read = configReader(config)
   const fetchImpl = deps.fetch ?? globalThis.fetch
-  const cache = deps.cache ?? (config.cache.enabled === false ? null : createCache({ ...config.cache, now: deps.now ?? Date.now }))
-  const { openai, limits } = config
+  const resolveApiKey = deps.resolveApiKey ?? environmentKey
+  // Cache bounds are fixed for the handler's lifetime; only the switch is live.
+  const cache = deps.cache ?? createCache({ ...read().cache, enabled: true, now: deps.now ?? Date.now })
 
   return async function speakHandler(req, res) {
     // A browser that disconnects mid-write emits an error on the response;
@@ -142,6 +182,16 @@ export function createSpeakHandler(config, deps = {}) {
       sendJson(req, res, 405, { error: { message: 'use POST' } }, { allow: 'POST' })
       return
     }
+
+    let current
+    try {
+      current = read()
+    } catch (error) {
+      sendJson(req, res, 500, { error: { message: String(error?.message ?? error) } })
+      return
+    }
+    const { openai, limits } = current
+    const caching = current.cache.enabled !== false
 
     let text
     try {
@@ -162,20 +212,24 @@ export function createSpeakHandler(config, deps = {}) {
       sendJson(req, res, 400, { error: { message: 'text exceeds ' + limits.maxCharsPerLine + ' characters' } })
       return
     }
+    if (openai.baseUrl === '') {
+      sendJson(req, res, 503, { error: { message: 'TTS URL is not configured' } })
+      return
+    }
 
     // Model-specific direction prefix (e.g. Drama 3 "[bright, playful] ").
     const spokenText = openai.textPrefix + text
-    const key = cacheKey(openai.model, openai.voice, spokenText, JSON.stringify(openai.extraBody ?? {}))
-    const cached = cache?.get(key) ?? null
+    const key = cacheKey(openai.baseUrl + '\u0000' + openai.model, openai.voice, spokenText, JSON.stringify(openai.extraBody ?? {}))
+    const cached = caching ? cache.get(key) : null
     if (cached !== null) {
       res.writeHead(200, pcmHeaders('hit', cached.length))
       res.end(cached)
       return
     }
 
-    const apiKey = readApiKey(openai)
+    const apiKey = await readApiKey(openai, resolveApiKey)
     if (apiKey === null) {
-      sendJson(req, res, 503, { error: { message: 'missing API key: set env ' + openai.apiKeyEnv } })
+      sendJson(req, res, 503, { error: { message: 'missing API key: set ' + openai.apiKeyEnv } })
       return
     }
 
@@ -205,17 +259,7 @@ export function createSpeakHandler(config, deps = {}) {
           'content-type': 'application/json',
           ...(apiKey === '' ? {} : { authorization: 'Bearer ' + apiKey }),
         },
-        body: JSON.stringify({
-          // Model-specific fields first (e.g. Drama 3 ref_audio/ref_text); the
-          // standard contract below always wins on conflict.
-          ...openai.extraBody,
-          model: openai.model,
-          voice: openai.voice,
-          input: spokenText,
-          response_format: 'pcm',
-          stream_format: 'audio',
-          ...(openai.speed === 1 ? {} : { speed: openai.speed }),
-        }),
+        body: JSON.stringify(speechBody(openai, spokenText)),
         signal: controller.signal,
       })
       if (!response.ok) {
@@ -239,7 +283,7 @@ export function createSpeakHandler(config, deps = {}) {
         }
       }
       res.end()
-      if (!clientGone && !overflow && received > 0) cache?.set(key, Buffer.concat(chunks, received))
+      if (caching && !clientGone && !overflow && received > 0) cache.set(key, Buffer.concat(chunks, received))
     } catch (error) {
       if (clientGone) return
       if (!res.headersSent) {

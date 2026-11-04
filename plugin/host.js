@@ -4,9 +4,48 @@ import { realpath, stat } from 'node:fs/promises'
 import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { pipeline } from 'node:stream/promises'
+import { normalize as normalizeTts } from '../plugins/dsh-tts/src/config.js'
+import { registerSpeechRoutes } from '../plugins/dsh-tts/src/index.js'
 
 export const name = 'deepseek-harness-kr'
 export const inject = ['webServer']
+
+// 말풍선 음성(TTS). 설정 화면이 쓰는 값은 모두 volatile이어야 한다(Settings는 volatile 필드만 쓴다).
+// 값의 범위·형식 검사는 요청마다 dsh-tts normalize가 맡고, 잘못된 값은 /dsh-tts/state가 이유를 알려 준다.
+const live = (schema) => schema.volatile()
+export const TtsConfig = z.object({
+  enabled: live(z.boolean().default(false)),
+  openai: z.object({
+    baseUrl: live(z.string().default('')),
+    model: live(z.string().default('')),
+    voice: live(z.string().default('')),
+    // API 키 자체가 아니라 credentials 참조 이름. 저장된 키가 먼저, 없으면 같은 이름의 환경변수.
+    apiKeyEnv: live(z.string().role('credential-ref').default('DSH_TTS_API_KEY')),
+    extraBody: live(z.dict(z.any()).default({})),
+    headers: live(z.dict(z.string()).default({})),
+    textPrefix: live(z.string().default('')),
+    timeoutMs: live(z.number().default(30000)),
+  }),
+  stream: z.object({
+    pcmSampleRate: live(z.number().default(24000)),
+  }),
+  voiceLines: z.object({
+    reactions: live(z.boolean().default(true)),
+    status: live(z.boolean().default(false)),
+    mutters: live(z.boolean().default(false)),
+    others: live(z.boolean().default(true)),
+  }),
+  cache: z.object({
+    enabled: live(z.boolean().default(true)),
+  }),
+})
+
+// volatile 참조(.get())가 섞인 설정을 그 시점의 평범한 값으로 바꾼다.
+export function readLive(value) {
+  if (value && typeof value.get === 'function') return structuredClone(value.get())
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+  return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, readLive(child)]))
+}
 
 export const Config = z.object({
   character: z.boolean().default(true).volatile(),
@@ -20,6 +59,7 @@ export const Config = z.object({
   shoesOff: z.boolean().default(false).volatile(),
   tailHide: z.boolean().default(false).volatile(),
   bodyType: z.union([z.const('default'), z.const('type1'), z.const('type2')]).default('default').volatile(),
+  tts: TtsConfig,
 })
 export const ASSET_PATH = '/deepseek-harness-kr/assets'
 const assets = fileURLToPath(new URL('../assets/', import.meta.url))
@@ -53,6 +93,8 @@ export function createAssetHandler(root = assets) {
   }
 }
 
-export function apply(ctx) {
+export function apply(ctx, config) {
   ctx.effect(() => ctx.webServer.register({ kind: 'prefix', path: ASSET_PATH, handler: createAssetHandler() }), 'deepseek-harness-kr: assets')
+  // 말풍선 음성: 설정 화면에서 바꾼 값(volatile)을 요청마다 다시 읽는다. 꺼져 있으면 404.
+  registerSpeechRoutes(ctx, () => normalizeTts(readLive(config?.tts)))
 }

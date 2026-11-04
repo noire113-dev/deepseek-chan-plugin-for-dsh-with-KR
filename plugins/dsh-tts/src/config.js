@@ -7,10 +7,14 @@
  * @module dsh-tts/config
  */
 
-/** Defaults, exactly as documented in cordis.patch.yml. */
+/**
+ * Defaults, exactly as documented in cordis.patch.yml. No endpoint, model or
+ * voice is assumed: an empty model or voice is left out of the request so the
+ * server's own default applies, and an empty baseUrl keeps the feature off.
+ */
 export const DEFAULTS = {
   enabled: false,
-  openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini-tts', voice: 'alloy', speed: 1, apiKeyEnv: 'OPENAI_API_KEY', headers: {}, timeoutMs: 30000, extraBody: {}, textPrefix: '' },
+  openai: { baseUrl: '', model: '', voice: '', speed: 1, apiKeyEnv: 'DSH_TTS_API_KEY', headers: {}, timeoutMs: 30000, extraBody: {}, textPrefix: '' },
   stream: { enabled: true, pcmSampleRate: 24000 },
   voiceLines: { reactions: true, status: false, mutters: false, others: true },
   cache: { enabled: true, maxEntries: 200, ttlMs: 604800000, maxCacheBytes: 33554432 },
@@ -84,6 +88,23 @@ function optionalText(source, key, path, fallback) {
   return resolved
 }
 
+/** Optional http(s) URL: '' means "not configured yet"; trailing slashes are dropped. */
+function optionalUrl(source, key, path, fallback) {
+  const trimmed = optionalText(source, key, path, fallback).trim()
+  if (trimmed.length === 0) return ''
+  return text({ [key]: trimmed }, key, path, '', { url: true })
+}
+
+/** Credential reference names double as environment variable names. */
+const CREDENTIAL_REF = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+/** Optional credential reference: '' opts out of auth, anything else is a POSIX identifier. */
+function credentialName(source, key, path, fallback) {
+  const trimmed = optionalText(source, key, path, fallback).trim()
+  if (trimmed.length > 0 && !CREDENTIAL_REF.test(trimmed)) fail(path, 'empty or a name like DSH_TTS_API_KEY', trimmed)
+  return trimmed
+}
+
 function stringMap(source, key, path) {
   const value = source[key]
   if (value === undefined) return {}
@@ -113,12 +134,14 @@ export function normalize(raw) {
   return {
     enabled: bool(source, 'enabled', 'enabled', DEFAULTS.enabled),
     openai: {
-      baseUrl: text(openai, 'baseUrl', 'openai.baseUrl', DEFAULTS.openai.baseUrl, { url: true }),
-      model: text(openai, 'model', 'openai.model', DEFAULTS.openai.model),
-      voice: text(openai, 'voice', 'openai.voice', DEFAULTS.openai.voice),
+      baseUrl: optionalUrl(openai, 'baseUrl', 'openai.baseUrl', DEFAULTS.openai.baseUrl),
+      // '' leaves the field out of the request; the server's default applies.
+      model: optionalText(openai, 'model', 'openai.model', DEFAULTS.openai.model).trim(),
+      voice: optionalText(openai, 'voice', 'openai.voice', DEFAULTS.openai.voice).trim(),
       speed: num(openai, 'speed', 'openai.speed', DEFAULTS.openai.speed, 0.25, 4),
+      // A credential reference (stored key first, then the same-named env var);
       // '' opts out of auth entirely (local/self-hosted servers without a key).
-      apiKeyEnv: optionalText(openai, 'apiKeyEnv', 'openai.apiKeyEnv', DEFAULTS.openai.apiKeyEnv),
+      apiKeyEnv: credentialName(openai, 'apiKeyEnv', 'openai.apiKeyEnv', DEFAULTS.openai.apiKeyEnv),
       headers: stringMap(openai, 'headers', 'openai.headers'),
       timeoutMs: num(openai, 'timeoutMs', 'openai.timeoutMs', DEFAULTS.openai.timeoutMs, 1000, 600000, { integer: true }),
       extraBody: jsonObject(openai, 'extraBody', 'openai.extraBody', DEFAULTS.openai.extraBody),
