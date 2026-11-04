@@ -6172,7 +6172,7 @@
 						"Id": "ChestX1"
 					},
 					"VertexIndex": 1,
-					"Scale": 1.6,
+					"Scale": 2.2,
 					"Weight": 100,
 					"Type": "Angle",
 					"Reflect": false
@@ -6183,7 +6183,7 @@
 						"Id": "ChestX2"
 					},
 					"VertexIndex": 2,
-					"Scale": 1.44,
+					"Scale": 1.98,
 					"Weight": 100,
 					"Type": "Angle",
 					"Reflect": false
@@ -6194,7 +6194,7 @@
 						"Id": "ChestX3"
 					},
 					"VertexIndex": 3,
-					"Scale": 0.8,
+					"Scale": 1.1,
 					"Weight": 100,
 					"Type": "Angle",
 					"Reflect": true
@@ -6205,7 +6205,7 @@
 						"Id": "ChestXBS"
 					},
 					"VertexIndex": 4,
-					"Scale": 0.8,
+					"Scale": 1.1,
 					"Weight": 100,
 					"Type": "Angle",
 					"Reflect": true
@@ -6247,7 +6247,7 @@
 						"X": 0,
 						"Y": 35
 					},
-					"Mobility": 0.94,
+					"Mobility": 0.96,
 					"Delay": 1,
 					"Acceleration": 1.25,
 					"Radius": 10
@@ -6257,7 +6257,7 @@
 						"X": 0,
 						"Y": 45
 					},
-					"Mobility": 0.91,
+					"Mobility": 0.93,
 					"Delay": 1,
 					"Acceleration": 1.25,
 					"Radius": 10
@@ -6323,7 +6323,7 @@
 						"Id": "ChestY1"
 					},
 					"VertexIndex": 1,
-					"Scale": 1.6,
+					"Scale": 3.0,
 					"Weight": 100,
 					"Type": "Angle",
 					"Reflect": false
@@ -6334,7 +6334,7 @@
 						"Id": "ChestY2"
 					},
 					"VertexIndex": 2,
-					"Scale": 1.6,
+					"Scale": 3.0,
 					"Weight": 100,
 					"Type": "Angle",
 					"Reflect": false
@@ -6345,7 +6345,7 @@
 						"Id": "ChestY3"
 					},
 					"VertexIndex": 3,
-					"Scale": 1.6,
+					"Scale": 3.0,
 					"Weight": 100,
 					"Type": "Angle",
 					"Reflect": false
@@ -6367,9 +6367,9 @@
 						"X": 0,
 						"Y": 13
 					},
-					"Mobility": 0.95,
+					"Mobility": 0.97,
 					"Delay": 1,
-					"Acceleration": 1.5,
+					"Acceleration": 1.95,
 					"Radius": 13
 				},
 				{
@@ -6377,9 +6377,9 @@
 						"X": 0,
 						"Y": 25
 					},
-					"Mobility": 0.91,
+					"Mobility": 0.97,
 					"Delay": 1,
-					"Acceleration": 1.625,
+					"Acceleration": 2.113,
 					"Radius": 12
 				},
 				{
@@ -6387,9 +6387,9 @@
 						"X": 0,
 						"Y": 35
 					},
-					"Mobility": 0.86,
+					"Mobility": 0.97,
 					"Delay": 1,
-					"Acceleration": 1.875,
+					"Acceleration": 2.438,
 					"Radius": 10
 				},
 				{
@@ -6397,17 +6397,17 @@
 						"X": 0,
 						"Y": 45
 					},
-					"Mobility": 0.91,
+					"Mobility": 0.97,
 					"Delay": 1,
-					"Acceleration": 2.0,
+					"Acceleration": 2.6,
 					"Radius": 10
 				}
 			],
 			"Normalization": {
 				"Position": {
-					"Minimum": -10,
+					"Minimum": -6,
 					"Default": 0,
-					"Maximum": 10
+					"Maximum": 6
 				},
 				"Angle": {
 					"Minimum": -57.3,
@@ -6454,7 +6454,7 @@
 						"Id": "ChestY4"
 					},
 					"VertexIndex": 1,
-					"Scale": 1.6,
+					"Scale": 3.0,
 					"Weight": 100,
 					"Type": "Angle",
 					"Reflect": true
@@ -6478,15 +6478,15 @@
 					},
 					"Mobility": 0.97,
 					"Delay": 1,
-					"Acceleration": 1.875,
+					"Acceleration": 2.438,
 					"Radius": 13
 				}
 			],
 			"Normalization": {
 				"Position": {
-					"Minimum": -10,
+					"Minimum": -6,
 					"Default": 0,
-					"Maximum": 10
+					"Maximum": 6
 				},
 				"Angle": {
 					"Minimum": -57.3,
