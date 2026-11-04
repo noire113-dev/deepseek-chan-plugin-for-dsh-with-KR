@@ -104,7 +104,8 @@ test("말풍선 조건부 유지: 재생 중이면 250ms 재확인, voiceState �
 
 test("dsc.js 는 특정 플러그인/URL 에 의존하지 않는다", () => {
   assert.ok(!/dsh-tts/i.test(SRC), "플러그인 이름 없음");
-  assert.ok(!/https?:\/\//i.test(SRC), "http(s) URL 없음");
+  // SVG 네임스페이스는 네트워크 주소가 아니므로 제외 (냄비·세숫대야 그림)
+  assert.ok(!/https?:\/\//i.test(SRC.replaceAll("http://www.w3.org/2000/svg", "")), "http(s) URL 없음");
 });
 
 test("node --check 로 dsc.js 문법 검사", () => {
