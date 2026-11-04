@@ -2,7 +2,7 @@ import { createRequire } from 'node:module'
 import { renderToStaticMarkup } from 'react-dom/server'
 import React from 'react'
 const require = createRequire(import.meta.url)
-import test from 'node:test'
+import test, { after } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile, mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -224,4 +224,89 @@ test('plugin settings page exposes three independently checked switches', () => 
 
 test('core worker is registered for termination when the plugin unloads', () => {
   assert.match(bundle, /new Worker\(BASE \+ "dsc-core-worker\.js"\); \} catch \{ return; \}\s*life\.add\(\(\) => \{ try \{ w\.terminate\(\) \} catch \{\} \}\)/)
+})
+
+test('update source parsing and version comparison', () => {
+  const h = clientHarness()
+  const { compareVersions } = h.client.internals
+  const githubSource = (spec) => { const r = h.client.internals.githubSource(spec); return r && { ...r } }
+  assert.deepEqual(githubSource('git+https://github.com/noire113-dev/deepseek-harness-kr.git'), { owner: 'noire113-dev', repo: 'deepseek-harness-kr', ref: null })
+  assert.deepEqual(githubSource('github:someone/fork#dev'), { owner: 'someone', repo: 'fork', ref: 'dev' })
+  assert.deepEqual(githubSource('git+ssh://git@github.com/a/b.git#v1'), { owner: 'a', repo: 'b', ref: 'v1' })
+  assert.equal(githubSource('C:/plugins/deepseek-harness-kr'), null)
+  assert.equal(githubSource('git+file:///C:/x/y'), null)
+  assert.equal(githubSource(undefined), null)
+  assert(compareVersions('0.1.3', '0.1.2') > 0)
+  assert(compareVersions('0.2.0', '0.1.10') > 0)
+  assert.equal(compareVersions('0.1.2', '0.1.2'), 0)
+  assert(compareVersions('0.1.2', '0.1.3') < 0)
+  assert(compareVersions('0.1.3', '0.1.3-rc.1') > 0)
+  h.dom.window.close()
+})
+
+function fakeManager({ version = '0.1.2', source = 'git+https://github.com/noire113-dev/deepseek-harness-kr.git', install } = {}) {
+  const calls = []
+  return {
+    calls,
+    async listBundles() { return { ok: true, value: [{ name: 'other', version: '9.9.9' }, { name: 'deepseek-harness-kr', version, source }] } },
+    async installBundle(spec, options) { calls.push([spec, options]); return install ? install(spec, options) : { ok: true, value: { application: 'restart-required', restartReason: 'no-hmr', changed: true } } },
+  }
+}
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+test('updater finds a newer version, updates through installBundle with the installed source, and asks for a restart', async () => {
+  const h = clientHarness(); after(() => h.dom.window.close())
+  const { createUpdater } = h.client.internals
+  const urls = []
+  const updater = createUpdater({ fetch: async (url) => { urls.push(url); return { ok: true, status: 200, json: async () => ({ version: '0.1.3' }) } } })
+  const manager = fakeManager()
+  updater.attach(manager); await settle()
+  assert.deepEqual(urls, ['https://raw.githubusercontent.com/noire113-dev/deepseek-harness-kr/HEAD/package.json'])
+  assert.equal(updater.getSnapshot().phase, 'available')
+  assert.equal(updater.getSnapshot().current, '0.1.2')
+  assert.equal(updater.getSnapshot().latest, '0.1.3')
+  await updater.update()
+  assert.equal(manager.calls.length, 1)
+  assert.equal(manager.calls[0][0], 'git+https://github.com/noire113-dev/deepseek-harness-kr.git')
+  assert.equal(manager.calls[0][1].enabled, true)
+  assert.equal(updater.getSnapshot().phase, 'restart')
+  await updater.update()
+  assert.equal(manager.calls.length, 1, 'no second install after the update finished')
+})
+
+test('updater reports current, unsupported, pinned, failures and a missing manager without installing', async () => {
+  const h = clientHarness(); after(() => h.dom.window.close())
+  const { createUpdater } = h.client.internals
+  const latest = (version) => async () => ({ ok: true, status: 200, json: async () => ({ version }) })
+  const run = async (options, manager) => { const u = createUpdater(options); u.attach(manager); await settle(); return u }
+  assert.equal((await run({ fetch: latest('0.1.2') }, fakeManager())).getSnapshot().phase, 'current')
+  assert.equal((await run({ fetch: latest('0.1.1') }, fakeManager())).getSnapshot().phase, 'current', 'older remote is not an update')
+  assert.equal((await run({ fetch: latest('9.0.0') }, fakeManager({ source: 'C:/local/deepseek-harness-kr' }))).getSnapshot().phase, 'unsupported')
+  assert.equal((await run({ fetch: latest('9.0.0') }, fakeManager({ source: 'git+https://github.com/a/b.git#6675ac2616c3' }))).getSnapshot().phase, 'pinned')
+  const offline = await run({ fetch: async () => ({ ok: false, status: 404 }) }, fakeManager())
+  assert.equal(offline.getSnapshot().phase, 'check-failed')
+  assert.match(offline.getSnapshot().error, /404/)
+  const failing = await run({ fetch: latest('0.1.3') }, fakeManager({ install: async () => ({ ok: true, value: { application: 'failed', error: { code: 'network', diagnostic: 'offline' } } }) }))
+  await failing.update()
+  assert.equal(failing.getSnapshot().phase, 'update-failed')
+  assert.match(failing.getSnapshot().error, /network: offline/)
+  const none = createUpdater({ fetch: latest('9.0.0') })
+  await none.check(); await none.update()
+  assert.equal(none.getSnapshot().phase, 'unavailable')
+  const detached = await run({ fetch: latest('0.1.3') }, fakeManager())
+  detached.detach(); await detached.update()
+  assert.equal(detached.getSnapshot().phase, 'unavailable')
+})
+
+test('settings page shows the update section and still works without the plugin manager', () => {
+  const h = clientHarness({ character: true, theme: true, translation: true })
+  try {
+    const ctx = h.ctx(); h.client.apply(ctx)
+    const Page = h.pages.get(packageName + '#deepseek-harness-kr')
+    const html = renderToStaticMarkup(React.createElement(Page, { view: 'page' }))
+    assert.match(html, /aria-label="Updates"/)
+    assert.match(html, /Plugin manager is unavailable/)
+    assert.equal((html.match(/role="switch"/g) || []).length, 3)
+    ctx.dispose()
+  } finally { h.dom.window.close() }
 })
