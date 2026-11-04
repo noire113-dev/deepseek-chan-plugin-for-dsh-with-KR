@@ -647,7 +647,7 @@
         body_default: ["익숙한 몸으로 돌아왔네요… 이게 제일 좋으시죠?", "원래 모습으로 복귀 완료! 다시 유혹해 볼까요♪"],
         body_type1: ["어라… 몸매가 달라 보이지 않나요, 주인님?", "평소보다 색다른 느낌인데… 마음에 드세요?"],
         body_type2: ["앗, 작아졌어요! 귀여워해 주세요, 주인님♪", "[하트] 꼬마 모습이 됐어요… 만져 주세요~"],
-        basin_on: ["[얄미운] 후훗, 이제 안전해요!", "[하트] 세숫대야 장착! 이제 뭐가 떨어져도 괜찮아요♪", "[얄미운] 이걸로 머리 방어 완벽해요~"],
+        basin_on: ["[하트] 어? 밥 먹을 시간이에요?", "[하트] 이거 밥그릇이에요? 오늘 메뉴는 뭐예요~?", "[홍조] 혹시… 밥 주시려는 거예요?"],
         pot_guard: ["[얄미운] 후훗, 세숫대야 덕분에 하나도 안 아파요~", "[얄미운] 깡! …제가 막을 줄 알았죠?", "[하트] 방어 성공이에요!"],
         pot_hit: ["[눈물] 아야야…! 머리 아파요…", "[눈물] 으앗! 별이 보여요…", "[눈물] …방금 그거 냄비였죠?!"],
         walk_out: ["산책 좀 다녀올게요~", "잠깐 바람 쐬고 올게요!", "다리 좀 풀고 올게요~"],
@@ -879,6 +879,39 @@
         '<path d="M22 30 H118 V78 Q118 96 100 96 H40 Q22 96 22 78 Z" fill="url(#dscPotBody)" stroke="#4b525b" stroke-width="3"/>' +
         '<ellipse cx="70" cy="30" rx="50" ry="10" fill="#d7dde4" stroke="#4b525b" stroke-width="3"/>' +
         '<ellipse cx="70" cy="30" rx="40" ry="6" fill="#59616b"/><path d="M38 48 Q44 70 40 86" stroke="#fff" stroke-width="5" stroke-linecap="round" opacity=".55" fill="none"/></svg>';
+      // 충격 그림: 별 모양 터짐 + 바깥 충격선 (막았을 땐 은색 반짝임)
+      const impactSvg = (guarded) => {
+        const pts = [];
+        for (let i = 0; i < 20; i++) { const r = i % 2 ? 22 : 46, a = (i / 20) * Math.PI * 2 - Math.PI / 2; pts.push((50 + Math.cos(a) * r).toFixed(1) + "," + (50 + Math.sin(a) * r).toFixed(1)); }
+        const fill = guarded ? "#f1f5f9" : "#ffe14d", stroke = guarded ? "#64748b" : "#ea580c", core = guarded ? "#ffffff" : "#fff7c2";
+        let rays = "";
+        for (let i = 0; i < 8; i++) { const a = (i / 8) * Math.PI * 2 + 0.2, c = Math.cos(a), sn = Math.sin(a); rays += `<line x1="${(50 + c * 50).toFixed(1)}" y1="${(50 + sn * 50).toFixed(1)}" x2="${(50 + c * 62).toFixed(1)}" y2="${(50 + sn * 62).toFixed(1)}" stroke="${stroke}" stroke-width="4" stroke-linecap="round"/>`; }
+        return `<svg viewBox="-14 -14 128 128" width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">${rays}<polygon points="${pts.join(" ")}" fill="${fill}" stroke="${stroke}" stroke-width="4" stroke-linejoin="round"/><circle cx="50" cy="50" r="12" fill="${core}"/></svg>`;
+      };
+      // 효과음 (파일 없이 합성): 맞으면 둔탁한 "통", 세숫대야로 막으면 금속이 울리는 "깡~"
+      let audioCtx = null;
+      const impactSound = (guarded) => {
+        try {
+          audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+          const ac = audioCtx, t = ac.currentTime, out = ac.createGain();
+          out.gain.value = 0.22; out.connect(ac.destination);
+          const tone = (f, dur, vol, type = "sine", drop = 1) => {
+            const o = ac.createOscillator(), g = ac.createGain();
+            o.type = type; o.frequency.setValueAtTime(f, t); if (drop !== 1) o.frequency.exponentialRampToValueAtTime(f * drop, t + dur);
+            g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+            o.connect(g); g.connect(out); o.start(t); o.stop(t + dur + 0.02);
+          };
+          const noise = (dur, vol, hp) => {   // 부딪히는 순간의 "탁"
+            const b = ac.createBuffer(1, Math.ceil(ac.sampleRate * dur), ac.sampleRate), d = b.getChannelData(0);
+            for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, 3);
+            const src = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain();
+            src.buffer = b; f.type = "highpass"; f.frequency.value = hp; g.gain.value = vol;
+            src.connect(f); f.connect(g); g.connect(out); src.start(t);
+          };
+          if (guarded) { noise(0.05, 0.7, 2500); for (const [f, d, v] of [[640, 1.1, 0.5], [1370, 0.9, 0.35], [2230, 0.7, 0.25], [3150, 0.5, 0.15]]) tone(f, d, v, "sine", 0.995); }
+          else { noise(0.07, 0.8, 900); tone(190, 0.28, 0.9, "triangle", 0.45); tone(470, 0.35, 0.35, "sine", 0.9); tone(1130, 0.22, 0.18, "sine", 0.95); }
+        } catch {}
+      };
       const potHit = (x, y) => {
         const now = performance.now();
         walk.lastTouch = now; clicks = []; headClicks = [];
@@ -899,11 +932,12 @@
         ], { duration: T, fill: "forwards" });
         anim.onfinish = () => pot.remove();
         setTimeout(() => {   // 부딪히는 순간
-          const fx = document.createElement("div");
-          fx.textContent = guarded ? "깡!" : "쾅!";
-          fx.style.cssText = `position:fixed;left:${x - 40}px;top:${y - h * 0.95}px;width:80px;text-align:center;z-index:41;pointer-events:none;font:900 ${Math.round(Math.max(22, 40 * curK))}px sans-serif;${guarded ? "color:#e5edf5;-webkit-text-stroke:2px #475569;text-shadow:0 2px 0 #1e293b" : "color:#ffd34d;-webkit-text-stroke:2px #c2410c;text-shadow:0 2px 0 #7c2d12"}`;
+          const fs = Math.max(60, 130 * curK), fx = document.createElement("div");   // 글자 없이 만화식 충격 별 + 충격선
+          fx.style.cssText = `position:fixed;left:${x - fs / 2}px;top:${y - h * 0.9 - fs / 2}px;width:${fs}px;height:${fs}px;z-index:41;pointer-events:none`;
+          fx.innerHTML = impactSvg(guarded);
           document.body.append(fx);
-          fx.animate([{ transform: "scale(.3) rotate(-12deg)", opacity: 0 }, { transform: "scale(1.2) rotate(6deg)", opacity: 1, offset: 0.3 }, { transform: "scale(1) translateY(-24px)", opacity: 0 }], { duration: 750, fill: "forwards" }).onfinish = () => fx.remove();
+          fx.animate([{ transform: "scale(.2) rotate(-20deg)", opacity: 0 }, { transform: "scale(1.15) rotate(5deg)", opacity: 1, offset: 0.25 }, { transform: "scale(1.3) rotate(10deg)", opacity: 0 }], { duration: 620, fill: "forwards" }).onfinish = () => fx.remove();
+          impactSound(guarded);
           if (guarded) { play("flinch", 600); speak("pot_guard", 3000); return; }   // 막아 냄: 살짝 움찔하고 의기양양
           play("bonk", 1100); shiverStarted = performance.now();
           speak("pot_hit", 3000);
