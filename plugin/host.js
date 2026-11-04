@@ -23,6 +23,8 @@ export const Config = z.object({
   // 절전: 입력이 없으면 캐릭터가 화면 밖으로 나가 렌더링을 멈춤
   idleSleep: z.boolean().default(true).volatile(),
   idleSleepMinutes: z.number().default(1).volatile(),
+  // 캐릭터 토글 단축키 (비워 두면 단축키 없음). 예: "Ctrl+Shift+D", "Alt+C"
+  characterToggleKey: z.string().default('Ctrl+Shift+D').volatile(),
 })
 export const ASSET_PATH = '/deepseek-harness-kr/assets'
 const assets = fileURLToPath(new URL('../assets/', import.meta.url))
