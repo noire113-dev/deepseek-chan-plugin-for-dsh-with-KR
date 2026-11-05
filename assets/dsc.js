@@ -1161,19 +1161,55 @@
       // 가까운 쪽 화면 끝(-1 = 왼쪽, 1 = 오른쪽)과 그쪽으로 완전히 나가는 거리. 높이는 그대로 두고 좌우로만 움직임.
       const nearSide = () => { const a = area(), c = shown.x - fleeX + W * curK / 2; return c - a.l < a.r - c ? -1 : 1; };
       const outDistance = (dir) => { const a = area(), x = shown.x - fleeX; return dir < 0 ? -(x + W * curK - a.l + 20) : a.r - x + 20; };
-      const flee = () => {   // 가까운 쪽 화면 밖으로 사라졌다가 10초 뒤 같은 쪽에서 돌아옴
+      // 도망
+      //  · 창 안: 창 경계 밖으로 걸어 나가 사라졌다가 10초 뒤 같은 쪽에서 돌아옴 (원래 동작)
+      //  · 펫 창: 멀티 모니터에서는 '화면 끝'이 다른 모니터라 지워지지 않으므로, 일정 거리 이동 + 페이드로 확실히 사라지게 한다
+      const FLEE_DIST = 300, FLEE_OUT_MS = 700, FLEE_IN_MS = 900, FLEE_HIDE_MS = 10000;
+      let fleeFade = 1;   // 도망 중 캔버스 불투명도 (1 = 평소)
+      const fleeSlide = (from, to, ms, done) => {
+        const t0 = performance.now();
+        const step = () => {
+          const p = Math.min(1, (performance.now() - t0) / ms), e = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+          fleeX = from + (to - from) * e;
+          if (p < 1) requestAnimationFrame(step); else done && done();
+        };
+        requestAnimationFrame(step);
+      };
+      const flee = () => {
         if (drag.pending || drag.on || link.open || link.follow) return;   // 예약된 사이 집었거나 펫 창으로 넘어갔으면 취소
-        const off = outDistance(nearSide()), go = (from, to, ms, done) => {
+        hush();
+        if (!PET) {   // 창 안: 화면(창) 경계 밖으로 나가면 그림이 잘려 자연스럽게 사라진다
+          const off = outDistance(nearSide());
+          fleeSlide(Math.sign(off) * 0.01, off, 700, () => setTimeout(() => fleeSlide(off, 0, 1100, () => {
+            fleeX = 0; setTimeout(() => speak("lower_after", 4000), 400);
+          }), 10000));
+          return;
+        }
+        // 펫 창: 거리 이동 + 페이드
+        const dist = nearSide() * Math.max(FLEE_DIST, W * curK * 0.5);     // 캐릭터가 클수록 조금 더 멀리
+        const finish = () => { fleeX = 0; fleeFade = 1; canvas.style.opacity = ""; setTimeout(() => speak("lower_after", 4000), 400); };
+        const runIn = () => {   // 사라진 자리에서 제자리까지 서서히 나타나며 돌아옴 (끌기 시작하면 즉시 복귀)
           const t0 = performance.now();
           const step = () => {
-            const p = Math.min(1, (performance.now() - t0) / ms), e = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
-            fleeX = from + (to - from) * e;
-            if (p < 1) requestAnimationFrame(step); else done && done();
+            if (drag.pending || drag.on) return finish();
+            const p = Math.min(1, (performance.now() - t0) / FLEE_IN_MS);
+            fleeX = dist * (1 - p * p * (3 - 2 * p));
+            fleeFade = p * p * (3 - 2 * p);
+            canvas.style.opacity = String(Math.min(1, fleeFade));
+            if (p < 1) requestAnimationFrame(step); else finish();
           };
           requestAnimationFrame(step);
         };
-        hush();
-        go(Math.sign(off) * 0.01, off, 700, () => setTimeout(() => go(off, 0, 1100, () => { fleeX = 0; setTimeout(() => speak("lower_after", 4000), 400); }), 10000));
+        const t0 = performance.now();
+        const runOut = () => {
+          const p = Math.min(1, (performance.now() - t0) / FLEE_OUT_MS);
+          fleeX = dist * (1 - Math.pow(1 - p, 3));                       // 빠르게 출발해 끝에서 감속
+          fleeFade = Math.max(0, 1 - Math.pow(p, 1.5));                  // 갈수록 빠르게 옅어져 도착하면 완전히 투명
+          canvas.style.opacity = String(fleeFade);
+          if (p < 1) requestAnimationFrame(runOut);
+          else setTimeout(runIn, FLEE_HIDE_MS);
+        };
+        requestAnimationFrame(runOut);
       };
       // ---------- 산책 ----------
       const WALK_SPEED = 320;   // 걷는 속도 (px/초)
