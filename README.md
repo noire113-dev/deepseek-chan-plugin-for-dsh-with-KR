@@ -88,7 +88,7 @@ DSH **0.2.1-rc.5** 이상의 Desktop 앱과 브라우저 Web UI에서 사용할 
 
 - 펫 창은 캐릭터 몸 위에서만 클릭을 받고 나머지는 뒤 화면으로 통과합니다. 끌어서 옮기고, 제자리 근처에 놓거나 우클릭 메뉴의 **창으로 돌아가기**를 고르면 다시 Harness 창에 붙습니다. Harness를 끄면 펫 창도 함께 종료됩니다.
 - **Desktop 앱의 Windows·macOS(Apple silicon)에서만 동작합니다.** 브라우저 Web UI와 그 외 환경에서는 창 안에서 끌어 옮기는 것까지만 됩니다.
-- 별도 설치는 필요 없습니다. 처음 끌 때 Harness의 Electron을 다시 써서 펫 전용 런타임을 만들고, Harness가 업데이트되면 자동으로 다시 만듭니다. 폴더를 지워도 안전합니다.
+- 별도 설치는 필요 없습니다. 시작 인사가 끝나고 한가할 때 Harness의 Electron을 다시 써서 펫 전용 런타임을 만들고 펫 창을 숨긴 채 미리 띄워 둡니다(첫 끌기에서 기다리지 않게). Harness가 업데이트되면 자동으로 다시 만들고, 폴더를 지워도 안전합니다.
   - Windows: `%LOCALAPPDATA%\deepseek-harness-kr\pet-runtime` (설치 폴더를 하드링크로 묶어 추가 용량이 거의 없고, 불가능하면 복사해 약 370MB)
   - macOS: `~/Library/Application Support/deepseek-harness-kr/pet-runtime` — 설치된 `DeepSeek Harness.app`의 일부를 APFS clone으로 복제한 작은 앱(추가 용량 거의 없음)을 만들고, **이 복사본에만** ad-hoc 서명을 합니다. 설치된 원본 앱은 읽기만 하고 수정하지 않으며, Dock·앱 전환기·메뉴 막대에는 나타나지 않습니다.
 

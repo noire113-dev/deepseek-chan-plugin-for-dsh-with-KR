@@ -9,7 +9,7 @@ import { connect } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
-import { createEndpoint, createPetHandler, createPetManager, electronExecutable, macBundle, prepareRuntime, PET_PATH } from '../pet-host.js'
+import { createEndpoint, createPetHandler, createPetManager, electronExecutable, lowerPriority, macBundle, prepareRuntime, restorePriority, PET_PATH } from '../pet-host.js'
 
 test('pet runtime reuses the DSH Electron files and replaces only the app folder', async () => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-kr-pet-'))
@@ -262,7 +262,7 @@ test('mac pet process gets a unix socket, accepts one connection and cleans up o
   const old = { ...process.env }; process.env.ELECTRON_RUN_AS_NODE = '1'; process.env.__CFBundleIdentifier = 'com.deepseek.dsh'
   try { await pet.warm() } finally { process.env = old }
   const [{ bin, args, opts, c }] = launches
-  assert.equal(bin, '/pet/bin')
+  assert.equal(bin, '/pet/bin')   // 펫은 직접 띄우고 우선순위는 띄운 뒤 -p 로 낮춤 (시작부터 건 백그라운드는 풀리지 않음)
   const sockPath = args.find((a) => a.startsWith('--dsc-pipe=')).slice('--dsc-pipe='.length)
   assert.ok(args.includes('--dsc-assets=A'))
   assert.equal(opts.stdio, 'ignore'); assert.equal('windowsHide' in opts, false)
@@ -328,4 +328,25 @@ test('펫 창 따라오기: 커서는 펫 프로세스가 직접 읽어 페이�
   assert.match(main, /screen\.getCursorScreenPoint\(\)[\s\S]*toPage\(\{ type: 'cursor'/)
   assert.match(dsc, /grab: \{ x: drag\.pending\?\.ox \?\? 0/)
   assert.ok(!dsc.includes('["follow", item]'), '따라오는 동안 위치를 HTTP로 보내면 왕복 지연만큼 끊긴다')
+})
+
+test('lowerPriority: 띄운 프로세스를 -b -p 로 낮추고, 실패해도 던지지 않는다', async () => {
+  const calls = []
+  await lowerPriority(42, async (cmd, args) => { calls.push([cmd, ...args]) })
+  assert.deepEqual(calls, [['/usr/sbin/taskpolicy', '-b', '-p', '42']])
+  await lowerPriority(42, async () => { throw new Error('nope') })
+})
+
+test('restorePriority: 주 프로세스와 자식의 백그라운드를 풀고, 실패해도 던지지 않는다', async () => {
+  const calls = []
+  const runner = async (cmd, args) => { calls.push([cmd, ...args]); if (cmd === '/usr/bin/pgrep') return { stdout: '11\n12\n' }; if (args[2] === '12') throw new Error('gone'); return { stdout: '' } }
+  await restorePriority(10, runner)
+  assert.deepEqual(calls.filter((c) => c[0] === '/usr/sbin/taskpolicy').map((c) => c[3]).sort(), ['10', '11', '12'])
+  await restorePriority(10, async () => { throw new Error('nope') })
+})
+
+test('웜업: 시작 인사·작업 중에는 미루고 한가할 때 숨긴 펫을 미리 띄운다', async () => {
+  const dsc = await readFile(new URL('../../assets/dsc.js', import.meta.url), 'utf8')
+  assert.match(dsc, /const warmUp = \(tries = 0\) => \{[\s\S]*intro\.phase !== "done" \|\| running \|\| document\.hidden[\s\S]*linkPost\("warm"\)/)
+  assert.match(dsc, /setTimeout\(warmUp, 5000\)/)
 })

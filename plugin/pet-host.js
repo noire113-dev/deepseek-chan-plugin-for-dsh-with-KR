@@ -133,6 +133,20 @@ function petSpawn(platform, base = process.env) {
   return { env, stdio: 'ignore', windowsHide: false }
 }
 
+const TASKPOLICY = '/usr/sbin/taskpolicy'
+
+/**
+ * macOS: 시작하는 동안(모델 불러오기, CPU 약 2.5초) 백그라운드 우선순위로 낮춰 작업을 방해하지 않게 함.
+ * 띄운 뒤 -p로 거는 이유: `taskpolicy -b <명령>`으로 시작부터 건 백그라운드는 나중에 -B -p로 풀리지 않음(종료 코드 0이지만 그대로, 실측).
+ * 낮춘 뒤 펫이 띄우는 GPU·renderer 프로세스는 같은 우선순위를 물려받고, -B -p로 풀림(실측)
+ */
+export const lowerPriority = (pid, runner = run) => runner(TASKPOLICY, ['-b', '-p', String(pid)]).then(() => {}, () => {})
+
+export async function restorePriority(pid, runner = run) {
+  const kids = await runner('/usr/bin/pgrep', ['-P', String(pid)]).then((r) => String(r.stdout).split('\n').filter(Boolean), () => [])
+  await Promise.all([String(pid), ...kids].map((p) => runner(TASKPOLICY, ['-B', '-p', p]).catch(() => {})))
+}
+
 const defaultBase = (platform = process.platform) => platform === 'darwin'
   ? join(homedir(), 'Library', 'Application Support', 'deepseek-harness-kr', 'pet-runtime')
   : join(process.env.LOCALAPPDATA || join(homedir(), '.cache'), 'deepseek-harness-kr', 'pet-runtime')
@@ -152,6 +166,8 @@ export function createPetManager({ assets, exe = electronExecutable(), platform 
   }
   const onMessage = (message) => {
     if (!message || typeof message.type !== 'string') return
+    // 시작이 끝났으니 보통 우선순위로. 보일 때도 한 번 더 (나중에 생긴 자식 프로세스까지)
+    if ((message.type === 'ready' || message.type === 'shown') && platform === 'darwin' && child?.pid) restorePriority(child.pid).catch(() => {})
     if (message.type === 'ready' || message.type === 'hidden') state = 'hidden'
     else if (message.type === 'shown') state = 'shown'
     if (message.type !== 'ready') events.push(message)
@@ -189,6 +205,7 @@ export function createPetManager({ assets, exe = electronExecutable(), platform 
     const bin = await prepare(exe, base, app)
     if (disposed) throw new Error('disposed')
     const c = child = spawnImpl(bin, [`--dsc-pipe=${pipe}`, `--dsc-assets=${assets}`], petSpawn(platform))
+    if (platform === 'darwin' && c?.pid) lowerPriority(c.pid)
     state = 'starting'
     // 지금 회차 번호를 붙여, 창 안 쪽이 이전 회차에 쌓인 종료 알림으로 진행 중인 따라오기를 끊지 않게 함. 이미 다른 프로세스로 바뀌었으면 무시
     c.once('exit', () => { if (child !== c) return; reset(); events.push({ type: 'closed', seq }) })
