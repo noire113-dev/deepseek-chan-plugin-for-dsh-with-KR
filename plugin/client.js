@@ -514,6 +514,7 @@ function settingsPage(ctx, form, updater, keys) {
     if (state.status !== 'ready') return React.createElement('p', { role: 'status' }, ko ? '설정을 불러오는 중입니다.' : 'Loading settings…')
     const fields = [
       ['character', ko ? '캐릭터와 말풍선' : 'Character and speech bubbles'],
+      ['intro', ko ? '시작할 때 등장 연출' : 'Intro on startup'],
       ['theme', ko ? '파스텔 테마' : 'Pastel theme'],
       ['translation', ko ? '한국어 언어팩' : 'Korean language pack'],
     ]
@@ -625,8 +626,10 @@ function apply(ctx) {
       syncTts(value)
       // 절전 설정도 실시간으로 전달 (캐릭터의 상태 감시 인터벌이 읽음)
       window.__dscSleep = { enabled: value.idleSleep !== false, minutes: sleepMinutes(value.idleSleepMinutes) }
+      // 시작 등장 연출 여부: 캐릭터가 처음 뜰 때 읽는다 (끄면 가운데 인사 없이 바로 제자리에)
+      window.__dscIntro = { enabled: value.intro !== false }
     }
-    life.add(() => { delete window.__dscOutfit; delete window.__dscSleep })
+    life.add(() => { delete window.__dscOutfit; delete window.__dscSleep; delete window.__dscIntro })
     life.add(form.subscribe(sync))
     // 단축키로 캐릭터 토글: 설정의 character 스위치를 뒤집는다 (설정 화면과 같은 저장소·같은 마운트/정리 경로)
     let heldToggleKey = '', togglePending = false

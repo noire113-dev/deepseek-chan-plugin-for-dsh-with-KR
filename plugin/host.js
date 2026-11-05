@@ -61,6 +61,8 @@ export const Config = z.object({
   tailHide: z.boolean().default(false).volatile(),
   bodyType: z.union([z.const('default'), z.const('type1'), z.const('type2')]).default('default').volatile(),
   tts: TtsConfig,
+  // 시작할 때 가운데에서 크게 인사하는 등장 연출 (끄면 처음부터 제자리에 뜬다)
+  intro: z.boolean().default(true).volatile(),
   // 절전: 입력이 없으면 캐릭터가 화면 밖으로 나가 렌더링을 멈춤
   idleSleep: z.boolean().default(true).volatile(),
   idleSleepMinutes: z.number().min(0.5).max(60).default(1).volatile(),

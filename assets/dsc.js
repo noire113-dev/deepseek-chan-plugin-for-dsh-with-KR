@@ -320,14 +320,16 @@
         const k = Math.min(innerHeight * 0.74 / visH, innerWidth * 0.55 / visW, 3.2);
         return { k, x: innerWidth / 2 - W * k / 2, y: innerHeight - H * k };
       };
-      intro.kc = centerPose().k; setRes(intro.kc);
+      // 설정에서 '시작할 때 등장 연출'을 끄면 가운데 인사 없이 처음부터 제자리에 뜬다
+      const introOff = !!window.__dscIntro && window.__dscIntro.enabled === false;
+      if (!introOff) { intro.kc = centerPose().k; setRes(intro.kc); }
       // 펫 창이거나 이미 펫 창이 떠 있으면 시작 연출 없이 바로 제자리
       const skipIntro = () => {
         if (intro.phase === "done") return;
         intro.phase = "done"; setRes(1); veil.remove(); canvas.style.opacity = "";
         bubble.style.left = ""; bubble.style.fontSize = ""; bubble.style.padding = "";   // 시작 연출용 큰 말풍선 스타일 해제
       };
-      if (PET) skipIntro();
+      if (PET || introOff) skipIntro();
 
       // ---------- 자유 위치 계산 ----------
       // 캔버스 왼쪽 위(x, y)·배율 k일 때 보이는 몸 영역 (양옆 빈 곳·머리 위 여백 제외). 커서가 몸 위인지 판정할 때 씀
