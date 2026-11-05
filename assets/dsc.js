@@ -1183,18 +1183,18 @@
         for (const t of walk.timers) clearTimeout(t);
         walk.timers = []; walk.slideId++; walk.phase = "";
       };
-      const walkBack = () => {   // 나갔던 쪽 화면 밖에서 원래 자리까지 걸어 들어옴
+      const walkBack = () => {   // 반대쪽(오른쪽) 화면 밖에서 원래 자리까지 걸어 들어옴
         if (walk.phase !== "away") return;
         for (const t of walk.timers) clearTimeout(t);
-        walk.timers = []; walk.phase = "in";
-        slide(walk.out, 0, () => {
+        walk.timers = []; walk.phase = "in"; walk.dir = 1;   // 오른쪽에서 들어와 왼쪽으로 걸어옴
+        slide(outDistance(1), 0, () => {
           fleeX = 0; walk.phase = "";
           walkLater(() => { if (!walk.phase) speak("walk_back", 3500); }, 450);   // 정면으로 돌아선 뒤 인사
         });
       };
       const startWalk = () => {   // 말하고 → 가까운 쪽으로 돌아서 → 화면 밖까지 걸어감(높이 그대로) → 8~14초 뒤 같은 쪽으로 돌아옴
         if (SLEEP.state !== "active") return;
-        walk.phase = "ready"; walk.dir = nearSide();
+        walk.phase = "ready"; walk.dir = -1;   // 연출: 항상 왼쪽으로 걸어 나갔다가 오른쪽에서 들어온다
         speak("walk_out", 2200);
         walkLater(() => {
           walk.phase = "out"; hush();
