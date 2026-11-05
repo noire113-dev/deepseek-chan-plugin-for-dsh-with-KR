@@ -126,6 +126,11 @@
       // 펫 창(전신) 배율과, 창 안↔펫 창의 머리 크기 비율 (붙을 때·넘길 때 같은 비율을 쓴다)
       const sFull = Math.min((W * 0.98) / (maxX - minX), (H * 0.95) / (maxY - minY));
       const PET_HEAD_RATIO = sBust / sFull;
+      // 허리(잘린 단면) 기준 정렬용 값. 펫 창과 창 안은 배율이 달라 캔버스 안 허리 높이도 다르다
+      const BUST_CX = (ux0 + ux1) / 2, FULL_CX = (minX + maxX) / 2;   // 모델 좌표에서 상반신·전신의 가로 중심
+      const WAIST_PET = H * 0.05 + (cutY - minY) * sFull;   // 펫 창 캔버스(k=1)에서 허리 y
+      const WAIST_WIN = H * 0.05 + (cutY - minY) * sBust;   // 창 안 캔버스(k=1)에서 허리 y
+      const WAIST_PCT = WAIST_PET / H * 100;                // 하반신 페이드를 시작할 높이(%)
       // 펫 창(전신): 모델 전체의 가로·세로를 캔버스에 맞추고 몸 가운데를 캔버스 가운데에 둔다
       const bw = WHOLE_BODY ? maxX - minX : ux1 - ux0;
       const bh = WHOLE_BODY ? maxY - minY : cutY - minY;
@@ -393,7 +398,7 @@
       };
       let lastPlaceKey = "";
       let lastClip = "";
-      let lastMask = "";
+      let lastMask = "", lastMaskComposite = "";
       const petWin = { x: NaN, y: NaN };
       let petTracking = false, petGrab = null;   // petGrab: 따라오는 중 커서가 몸을 잡은 자리   // 펫 프로세스가 커서를 직접 따라 창을 옮기는 중 (이때 여기서 창을 옮기면 서로 밀어 끊김)
       let petBox = "";   // 펫 창: 마지막으로 알린 몸 영역
@@ -434,7 +439,8 @@
         const show = introOn || k >= SHOW_K;
         canvas.style.display = bubble.style.display = show ? "block" : "none";
         if (!show) return;
-        curK = k;
+        // 배율이 바뀌면 그만큼 렌더 해상도를 올린다 (펫 창처럼 크게 그릴 때 버퍼가 모자라 뿌옇게 보이던 문제)
+        if (curK !== k) { curK = k; setRes(k); }
         shown.k = k; shown.x = x; shown.y = y;
         const loose = PET || dock !== home;   // 자유 위치·펫 창: 말풍선 꼬리가 머리 위에 오게
         if (PET) {
@@ -463,16 +469,41 @@
         if (clip !== lastClip) { canvas.style.clipPath = clip; lastClip = clip; }
         // 배치에 쓰는 값이 그대로면 건너뜀: 매 프레임 side 클래스를 뗐다 붙이며 레이아웃을 3번씩 강제하던 것 방지
         // 허리 아래가 잘린 창 안 그림은 화면 아래에서 띄우면 띄운 만큼 아래쪽을 흐리게 (꼬마 모습은 발까지 그려져 안 흐림)
-        // 펫 창은 전신을 다 그리므로 흐리지 않는다 (예전엔 늘 흐려서 다리가 사라져 보였다)
+        // 펫 창은 전신을 그리지만, 제자리로 붙는 동안에는 하반신을 서서히 지워 도착할 때 창 안 상반신 그림과 이어지게 한다
         const lift = PET ? 0 : Math.max(0, innerHeight - (y + H * k));
         const fade = PET ? 0 : Math.round(Math.max(0, Math.min(lift, H * k * 0.18)) * (1 - Math.min(1, Math.max(0, bodyW))));
+        const petFade = PET ? Math.min(1, Math.max(0, petDocked ? 1 : snapP)) : 0;   // 붙는 진행도 (0 = 전신 그대로, 1 = 하반신 완전히 사라짐)
+        // 펫 창: DSH 창 안쪽은 또렷하게, 창 밖으로 나간 부분은 흐리게(반투명) — 창 영역을 기준으로 자른다
+        const winBox = PET && petDock && petDock.win ? petDock.win : null;
         const r0 = home.r;
         const placeKey = introOn ? "" : [k, x, y, innerWidth, innerHeight, fleeX, Math.round(bodyW * 40), r0 && r0.left, r0 && r0.right, r0 && r0.top, r0 && r0.bottom,
-          bubble.textContent, bubble.className.replace(/\bside\b/g, "").trim(), fade, loose].join("|");
+          bubble.textContent, bubble.className.replace(/\bside\b/g, "").trim(), fade, Math.round(petFade * 60), loose,
+          winBox ? [winBox.l, winBox.t, winBox.r, winBox.b].join(",") : ""].join("|");
         if (placeKey && placeKey === lastPlaceKey) return;
         lastPlaceKey = placeKey;
-        const mask = fade > 0 ? `linear-gradient(to bottom, #000 calc(100% - ${fade}px), transparent)` : "";
-        if (mask !== lastMask) { canvas.style.maskImage = canvas.style.webkitMaskImage = mask; lastMask = mask; }
+        let mask = "";
+        let maskComposite = "";
+        if (winBox && petFade > 0.001) {
+          // 복귀 중에만: DSH 창 안쪽은 또렷(불투명), 바깥으로 나간 부분은 진행도에 따라 흐려져 도착하면 완전히 사라진다.
+          //  · 허리 기준 정렬 덕분에 도착 시 하반신이 창 아래 = 바깥에 놓이므로, 하반신이 자연스럽게 지워진다
+          //  · 평소(복귀 아닐 때)에는 이 마스크를 쓰지 않아 캐릭터가 그대로 또렷하게 보인다
+          const o = screenOf(0, 0), A = (1 - petFade).toFixed(3);
+          const l = (winBox.l - o.x - x).toFixed(1), r = (winBox.r - o.x - x).toFixed(1);
+          const t = (winBox.t - o.y - y).toFixed(1), b = (winBox.b - o.y - y).toFixed(1);
+          mask = `linear-gradient(to right, rgba(0,0,0,${A}) 0 ${l}px, #000 ${l}px ${r}px, rgba(0,0,0,${A}) ${r}px 100%), `
+            + `linear-gradient(to bottom, rgba(0,0,0,${A}) 0 ${t}px, #000 ${t}px ${b}px, rgba(0,0,0,${A}) ${b}px 100%)`;
+          maskComposite = "intersect";
+        } else if (petFade > 0.001) {
+          // 펫 창 영역을 아직 받지 못했을 때의 대비: 허리 기준으로 페이드
+          const alpha = (1 - petFade).toFixed(3), b0 = Math.max(0, WAIST_PCT - 2.5).toFixed(2), b1 = Math.min(100, WAIST_PCT + 2.5).toFixed(2);
+          mask = `linear-gradient(to bottom, #000 0 ${b0}%, rgba(0,0,0,${alpha}) ${b1}% 100%)`;
+        } else if (fade > 0) mask = `linear-gradient(to bottom, #000 calc(100% - ${fade}px), transparent)`;
+        if (mask !== lastMask || maskComposite !== lastMaskComposite) {
+          canvas.style.maskImage = canvas.style.webkitMaskImage = mask;
+          canvas.style.maskComposite = maskComposite || "add";
+          canvas.style.webkitMaskComposite = maskComposite === "intersect" ? "source-in" : "source-over";
+          lastMask = mask; lastMaskComposite = maskComposite;
+        }
         canvas.style.width = W * k + "px"; canvas.style.height = H * k + "px";
         if (fleeX !== 0) bubble.style.display = "none";
         canvas.style.left = x + "px"; canvas.style.top = y + "px";
@@ -1659,11 +1690,19 @@
           if (!link.open && !link.opening && !link.follow) return;
           if (link.open || link.follow) {   // 붙을 자리(DSH 창의 제자리, 창이 좁으면 구석)와 소품·옷을 펫 창에 알려 줌
             const h = dockTarget(link.home || homePose()), d = screenOf(h.x - fleeX, h.y);
-            // 펫 창은 전신이라 같은 k면 머리가 작다. 창 안과 머리 크기가 같아지는 배율(PET_HEAD_RATIO)로 넘겨
-            // 붙는 순간 창 안 캐릭터로 바뀔 때 크기가 튀지 않게 한다 (아래 가운데 고정)
+            // 붙는 순간 창 안 상반신 그림과 정확히 겹치도록, 허리(잘린 단면)와 가슴 중심을 기준으로 자리를 잡는다.
+            //  · 창 안: 허리는 캔버스 y = WAIST_WIN, 상반신 가로 중심은 캔버스 가운데
+            //  · 펫 창: 같은 허리·중심이 그 지점에 오도록 배율(PET_HEAD_RATIO)과 위치를 역산
             const k2 = h.k * PET_HEAD_RATIO;
+            const wx = d.x + W * h.k / 2;              // 창 안 상반신 가로 중심 (화면)
+            const wy = d.y + h.k * WAIST_WIN;          // 창 안 허리 (화면)
             const tl = screenOf(0, 0), br = screenOf(innerWidth, innerHeight);   // DSH 창 영역 (펫 창이 다시 붙을지 판단)
-            const dock = { k: +k2.toFixed(3), x: Math.round(d.x + W * (h.k - k2) / 2), y: Math.round(d.y + H * (h.k - k2)), win: { l: Math.round(tl.x), t: Math.round(tl.y), r: Math.round(br.x), b: Math.round(br.y) } }, outfit = window.__dscOutfit || {};
+            const dock = {
+              k: +k2.toFixed(3),
+              x: Math.round(wx - k2 * (W / 2 + (BUST_CX - FULL_CX) * sFull)),
+              y: Math.round(wy - k2 * WAIST_PET),
+              win: { l: Math.round(tl.x), t: Math.round(tl.y), r: Math.round(br.x), b: Math.round(br.y) },
+            }, outfit = window.__dscOutfit || {};
             const sig = JSON.stringify([dock, outfit]);
             if (sig !== link.last) { link.last = sig; link.queue.push(["dock", [dock]], ["outfit", [outfit]]); }
             if (link.queue.length) { const list = link.queue; link.queue = []; linkPost("send", { list }); }
