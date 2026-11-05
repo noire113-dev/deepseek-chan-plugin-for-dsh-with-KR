@@ -8,7 +8,7 @@
 - **Client** (`lib/client.js`, 빌드 산출물 커밋됨): `dsc:say` 이벤트를 듣고 PCM16을 첫 청크부터 재생, Analyser RMS로 `window.__dsc.voice({ speaking, level, until })`를 갱신합니다.
 - **말풍선 타이밍은 TTS와 무관**: 꺼짐/오류/지연이면 `voice(null)`일 뿐 dsc.js의 숨김 타이머는 그대로입니다.
 
-## deepseek-harness-kr에 포함 (0.1.5부터)
+## deepseek-harness-kr에 포함 (0.1.6부터)
 
 kr 플러그인이 이 디렉터리의 `src/`를 그대로 가져다 씁니다. kr 설정 창의 **말풍선 음성**에서 켜고 URL·API 키·모델·보이스·샘플레이트·추가 파라미터(JSON)를 넣습니다.
 

@@ -1,5 +1,5 @@
 # dsh-tts — 옵트인 음성 플러그인.
-# deepseek-harness-kr 0.1.5부터 kr 플러그인에 포함되어, kr 설정 창의 "말풍선 음성"에서
+# deepseek-harness-kr 0.1.6부터 kr 플러그인에 포함되어, kr 설정 창의 "말풍선 음성"에서
 # 켜고 설정한다. 이 단독 row는 kr 없이 따로 쓰는 경우에만 필요하며, kr과 함께 켜면
 # 같은 라우트가 두 번 등록되므로 둘 중 하나만 쓴다.
 # Host half: GET /dsh-tts/state + POST /dsh-tts/speak, a streaming proxy to an

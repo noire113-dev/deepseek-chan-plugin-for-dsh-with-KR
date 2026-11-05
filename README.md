@@ -17,7 +17,7 @@ https://github.com/user-attachments/assets/7e7a96cc-efc8-416d-89a0-f574fdcda690
 |---|---|
 | `plugin/` · `package.json` | DSH 플러그인: 한국어 UI, 파스텔 테마, Live2D 캐릭터 |
 | `assets/` | 플러그인이 사용하는 캐릭터 코드·Live2D 모델·테마·배경 |
-| `plugins/dsh-tts/` | 말풍선 음성(TTS) 원본 코드. 0.1.5부터 kr 플러그인에 포함되어 설정 창에서 켭니다 |
+| `plugins/dsh-tts/` | 말풍선 음성(TTS) 원본 코드. 0.1.6부터 kr 플러그인에 포함되어 설정 창에서 켭니다 |
 | `infographic/` | 소개 영상 최종본과 제작 파일 |
 
 ## 인앱 캐릭터가 하는 일
@@ -31,7 +31,9 @@ https://github.com/user-attachments/assets/7e7a96cc-efc8-416d-89a0-f574fdcda690
   - 머리를 만지면 정색하고, 계속 만지면 턱을 들고 고개를 홱 돌려 삐집니다. 삐진 15초 동안은 터치를 받지 않고, 가끔 몰래 쳐다봤다가 다시 외면합니다. 풀릴 때는 눈을 똑바로 맞추며 한마디 합니다.
   - 머리를 누른 채 아래로 빠르게 쓸어내리면 냄비가 떨어져 머리를 치고(효과음), 천천히 쓸어내리면 세숫대야를 씌웁니다. 세숫대야를 쓴 채 냄비를 맞으면 막아 냅니다.
   - 가슴을 계속 만지면 하트 눈으로 부끄러워하며 왼손으로 가슴을 가립니다.
+  - 가슴을 누른 채 위로 끌면 끌려 올라가고(“아흣…?!”), 놓으면 아래로 떨어지며 출렁이고 부끄러워합니다(“꺅!”).
 - 가끔 쉴 때 꼬마 모습으로 산책을 다녀옴: 왼쪽 화면 밖으로 걸어 나갔다가 잠시 뒤 오른쪽에서 걸어 들어옵니다. 작업이 시작되면 바로 돌아옵니다.
+- 절전모드: 정해 둔 시간(기본 1분) 동안 입력이 없으면 오른쪽 화면 밖으로 나가 렌더링을 멈추고, 입력이나 작업이 생기면 돌아옵니다. 펫 창으로 꺼내 둔 동안에는 절전하지 않습니다. 캐릭터 켜기·끄기 단축키(기본 `Ctrl+Shift+D`)도 설정할 수 있습니다.
 - 소품(뿔테 안경·외눈 안경)·옷(치마 길이·가슴 옷·신발·꼬리)·체형(기본·체형 1·꼬마) 바꾸기
 - 캐릭터를 끌어서 옮기기, 몸이 Harness 창 밖으로 나가면 바탕화면 위 투명한 펫 창으로 떼어 내기 (Desktop 앱의 Windows·macOS) — [바깥 펫 창](#바깥-펫-창) 참고
 - 한국어·영어 화면 모두 지원
@@ -78,7 +80,7 @@ DSH **0.2.1-rc.5** 이상의 Desktop 앱과 브라우저 Web UI에서 사용할 
 - 작업 상태·추론 문구에 반응하는 말풍선
 - 파스텔 테마 (Harness의 밝은 모드·다크 모드 설정을 그대로 따름)
 - UI 번역 54개 네임스페이스를 제공하는 한국어 언어팩
-- 말풍선 음성(TTS): 설정 창에서 켜기와 URL·API 키 등록 (0.1.5부터 포함)
+- 말풍선 음성(TTS): 설정 창에서 켜기와 URL·API 키 등록 (0.1.6부터 포함)
 - 설정 화면에서 소품·옷·체형 바꾸기
 - 설정 화면에서 새 버전 확인과 업데이트
 
@@ -103,6 +105,8 @@ DSH **0.2.1-rc.5** 이상의 Desktop 앱과 브라우저 Web UI에서 사용할 
 | 한국어 언어팩 | 한국어 UI 번역 등록 |
 | 소품·옷 | 뿔테 안경, 외눈 안경, 치마 길이 바꾸기, 가슴 옷 바꾸기, 신발 벗기, 꼬리 숨기기 (기본값 꺼짐) |
 | 체형 | 기본 체형, 체형 1, 체형 2(꼬마) 중 선택 (기본값 기본 체형) |
+| 절전 | 입력이 없을 때 캐릭터를 화면 밖으로 내보내고 렌더링 멈춤 (기본값 켜짐, 대기 시간 0.5~60분, 기본 1분) |
+| 단축키 | 캐릭터 켜기·끄기 단축키 (기본값 `Ctrl+Shift+D`, 비우면 사용 안 함) |
 | 말풍선 음성 | 말풍선 대사를 TTS로 읽기 (기본값 꺼짐) — [말풍선 음성](#말풍선-음성-tts-옵트인) 참고 |
 
 캐릭터·테마·한국어는 기본값이 활성화이며, 변경 사항은 즉시 적용되고 현재 프로필에 저장됩니다. 한국어 표시 언어는 **Settings → General → Language**에서 선택합니다.
@@ -129,7 +133,7 @@ npm test
 
 ## 말풍선 음성 (TTS, 옵트인)
 
-0.1.5부터 말풍선 음성(`plugins/dsh-tts`)이 이 플러그인에 포함됩니다. 따로 설치할 것 없이 설정 창의 **말풍선 음성** 칸에서 켜고 설정합니다. YAML을 고칠 필요는 없습니다.
+0.1.6부터 말풍선 음성(`plugins/dsh-tts`)이 이 플러그인에 포함됩니다. 따로 설치할 것 없이 설정 창의 **말풍선 음성** 칸에서 켜고 설정합니다. YAML을 고칠 필요는 없습니다.
 
 - OpenAI 호환 `/audio/speech` API로 음성을 스트리밍 재생하고, 소리 크기(RMS)에 맞춰 캐릭터 입을 움직입니다. 음소 단위 정밀 립싱크는 아직 지원하지 않습니다.
 - 기본값은 **꺼짐**이고, 주소·모델·보이스도 미리 정해 두지 않습니다. 꺼져 있거나 URL이 비어 있으면 외부로 아무 요청도 보내지 않습니다.
@@ -184,7 +188,7 @@ npm test
 
 - [@conankun](https://github.com/conankun) — 말풍선 TTS와 오디오 기반 입 모양 플러그인 `plugins/dsh-tts` ([#2](https://github.com/noire113-dev/deepseek-harness-kr/pull/2))
 - [@shortstories](https://github.com/shortstories) — Harness 플러그인 메뉴에서 바로 설치하는 방식, 캐릭터·테마·한국어 개별 설정 ([#3](https://github.com/noire113-dev/deepseek-harness-kr/pull/3))
-- [@TraceofLight](https://github.com/TraceofLight) — macOS(Apple silicon) 적용 스크립트 ([#4](https://github.com/noire113-dev/deepseek-harness-kr/pull/4)), 승인·질문 카드가 캐릭터에 가려지던 문제 수정 ([#6](https://github.com/noire113-dev/deepseek-harness-kr/pull/6)), Live2D 렌더링 최적화와 시작 시 끊김 완화 ([#7](https://github.com/noire113-dev/deepseek-harness-kr/pull/7))
-- [@iwannagit](https://github.com/iwannagit) — 파스텔 테마 다크 모드 지원 ([#5](https://github.com/noire113-dev/deepseek-harness-kr/pull/5))
+- [@TraceofLight](https://github.com/TraceofLight) — macOS(Apple silicon) 적용 스크립트 ([#4](https://github.com/noire113-dev/deepseek-harness-kr/pull/4)), 승인·질문 카드가 캐릭터에 가려지던 문제 수정 ([#6](https://github.com/noire113-dev/deepseek-harness-kr/pull/6)), Live2D 렌더링 최적화와 시작 시 끊김 완화 ([#7](https://github.com/noire113-dev/deepseek-harness-kr/pull/7)), 말풍선 음성 내장·말풍선 꼬리·캐릭터 자유 위치와 바깥 펫 창 ([#12](https://github.com/noire113-dev/deepseek-harness-kr/pull/12))
+- [@iwannagit](https://github.com/iwannagit) — 파스텔 테마 다크 모드 지원 ([#5](https://github.com/noire113-dev/deepseek-harness-kr/pull/5)), 절전모드와 캐릭터 켜기·끄기 단축키 ([#11](https://github.com/noire113-dev/deepseek-harness-kr/pull/11))
 
 좋은 기능을 보내 주신 분들께 감사드립니다!
