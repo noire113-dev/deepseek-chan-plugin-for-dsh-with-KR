@@ -8,6 +8,7 @@ const { pathToFileURL } = require('node:url')
 
 const arg = (name) => { const hit = process.argv.find((a) => a.startsWith(`--${name}=`)); return hit ? hit.slice(name.length + 3) : '' }
 const PIPE = arg('dsc-pipe'), ASSETS = arg('dsc-assets'), APP = __dirname
+const OWN = '/__app'   // dscpet://assets 아래에서 이 앱 폴더를 가리키는 경로
 const WIN_W = 440, WIN_H = 540   // 캐릭터(최대 375px)와 머리 위 말풍선이 들어가는 크기
 
 const MAC = process.platform === 'darwin'
@@ -30,7 +31,7 @@ let pageReady = false
 const pending = []
 const toPage = (message) => { if (!win || win.isDestroyed()) return; if (pageReady) win.webContents.send('dsc', message); else pending.push(message) }
 const inside = (root, file) => { const rel = path.relative(root, file); return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel) }
-const hide = () => { if (win && !win.isDestroyed() && win.isVisible()) { win.hide(); setAccept(false); toHost({ type: 'hidden' }) } reloadIfStale() }
+const hide = () => { if (win && !win.isDestroyed() && win.isVisible()) { win.hide(); setAccept(false); toHost({ type: 'hidden' }) } toPage({ type: 'power', on: false }); reloadIfStale() }
 // 클릭 받기: 평소엔 뒤 화면으로 통과시키고, 커서가 캐릭터 몸 영역(box, 창 안 좌표) 안이거나 누르고 끄는 중(force)일 때만 받음.
 // 커서 위치는 여기서 직접 읽음 (Windows에서 클릭 통과 중 마우스 이동 전달(forward)이 창을 옮긴 뒤 끊겨 다시 못 집는 일이 있어서)
 let box = null, force = false, accepting = false
@@ -58,10 +59,11 @@ const fromHost = (message) => {
 }
 
 app.whenReady().then(() => {
-  // dscpet://assets/… = 플러그인 assets, dscpet://app/… = 이 앱 폴더
+  // dscpet://assets/… = 플러그인 assets, dscpet://assets/__app/… = 이 앱 폴더 (페이지와 assets가 한 출처여야 Core 계산 Worker를 만들 수 있음)
   protocol.handle('dscpet', (request) => {
-    const url = new URL(request.url), root = url.host === 'assets' ? ASSETS : APP
-    const file = path.join(root, decodeURIComponent(url.pathname))
+    const url = new URL(request.url), pathname = decodeURIComponent(url.pathname), own = pathname.startsWith(OWN + '/')
+    const root = own ? APP : ASSETS
+    const file = path.join(root, own ? pathname.slice(OWN.length) : pathname)
     if (!inside(root, file)) return new Response('', { status: 404 })
     return net.fetch(pathToFileURL(file).toString())
   })
@@ -80,7 +82,7 @@ app.whenReady().then(() => {
   win.setIgnoreMouseEvents(true, { forward: true })   // 처음엔 클릭 통과 (accepting = false)
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   win.webContents.on('will-navigate', (event) => event.preventDefault())
-  win.loadURL('dscpet://app/index.html')
+  win.loadURL(`dscpet://assets${OWN}/index.html`)
   ipcMain.on('dsc', (event, message) => {
     if (event.sender !== win.webContents || !message || typeof message.type !== 'string') return
     switch (message.type) {

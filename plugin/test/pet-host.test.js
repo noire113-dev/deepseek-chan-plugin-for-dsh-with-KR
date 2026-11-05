@@ -299,3 +299,18 @@ test('mac pet runtime is removed when disposed while preparing', posixOnly, asyn
 async function socketDirs() {
   return (await readdir(tmpdir())).filter((n) => n.startsWith('dsc-pet-')).map((n) => join(tmpdir(), n))
 }
+
+test('펫 페이지와 assets는 한 출처(dscpet://assets)라 Core 계산 Worker를 만들 수 있다', async () => {
+  const html = await readFile(new URL('../../pet/index.html', import.meta.url), 'utf8')
+  const main = await readFile(new URL('../../pet/main.cjs', import.meta.url), 'utf8')
+  assert.ok(!html.includes('dscpet://'), '페이지가 다른 출처(dscpet://app)를 가리키면 Worker 생성이 SecurityError로 막힌다')
+  assert.match(main, /loadURL\(`dscpet:\/\/assets\$\{OWN\}\/index\.html`\)/)
+})
+
+test('펫 창이 숨으면 페이지에 그리기 중지를 알리고, 페이지는 그리기를 멈춘 채 대기한다', async () => {
+  const main = await readFile(new URL('../../pet/main.cjs', import.meta.url), 'utf8')
+  const dsc = await readFile(new URL('../../assets/dsc.js', import.meta.url), 'utf8')
+  assert.match(main, /toPage\(\{ type: 'power', on: false \}\)/)
+  assert.match(dsc, /m\.type === "power"/)
+  assert.match(dsc, /처음엔 숨은 채 대기/)
+})
