@@ -87,19 +87,27 @@
       const im = model.internalModel, core = im.coreModel;
       im.eyeBlink = undefined; im.breath = undefined;
       const CHEST_DRAG_SIGN = 1;   // 화면에서 확인 후 -1로 바꿀 수 있음
-      const dragLift = { x: 0, v: 0 };
-      let chestFrom = null, chestDragging = false, chestTarget = 0;
+      const dragLift = { x: 0, v: 0 };    // 위아래로 끌어올린 정도 (0~1)
+      const dragShift = { x: 0, v: 0 };   // 좌우로 끌어당긴 정도 (-1~1)
+      let chestFrom = null, chestDragging = false, chestTarget = 0, chestShiftTarget = 0;
+      let chestLongTimer = 0;   // 3초 넘게 '흔들었을' 때 자극적인 대사로 넘어가는 감시 타이머
+      const chestShake = { x: 0, y: 0, acc: 0, last: 0, next: 0 };   // acc = 흔든 양, last = 마지막으로 흔든 시각
       if (im.physics) {
         const evaluate = im.physics.evaluate;
-        const chestParams = ["ChestY1", "ChestY2", "ChestY3", "ChestY4"].map((id) => {
+        const param = (id) => {
           const i = core.getParameterIndex(id);
-          return { id, min: core.getParameterMinimumValue(i), max: core.getParameterMaximumValue(i) };
-        }).filter((p) => Number.isFinite(p.min) && Number.isFinite(p.max));
+          if (i < 0) return null;
+          const min = core.getParameterMinimumValue(i), max = core.getParameterMaximumValue(i);
+          return Number.isFinite(min) && Number.isFinite(max) ? { id, min, max } : null;
+        };
+        const chestParams = ["ChestY1", "ChestY2", "ChestY3", "ChestY4"].map(param).filter(Boolean);   // 위아래
+        const chestXParams = ["ChestX1", "ChestX2", "ChestX3"].map(param).filter(Boolean);              // 좌우
         im.physics.evaluate = function (...args) {
           const result = evaluate.apply(this, args);
-          // 물리가 덮어쓴 뒤 가슴에만 더함
-          const lift = dragLift.x * CHEST_DRAG_SIGN;
-          if (lift) for (const p of chestParams) core.addParameterValueById(p.id, lift * (lift > 0 ? p.max : -p.min) * 0.8);
+          // 물리가 덮어쓴 뒤 가슴에만 더함 (파라미터 범위를 꽉 쓰고, 좌우는 방향 따라)
+          const lift = dragLift.x * CHEST_DRAG_SIGN, shift = dragShift.x * CHEST_DRAG_SIGN;
+          if (lift) for (const p of chestParams) core.addParameterValueById(p.id, lift * (lift > 0 ? p.max : -p.min));
+          if (shift) for (const p of chestXParams) core.addParameterValueById(p.id, shift * (shift > 0 ? p.max : -p.min) * 0.9);
           return result;
         };
       }
@@ -648,7 +656,9 @@
         destroy() {},
         update() {
           const now = performance.now(), dt = Math.min(0.05, (now - lastT) / 1000); lastT = now;
-          spring(dragLift, chestDragging ? chestTarget : 0, dt, chestDragging ? 650 : 140, chestDragging ? 45 : 6);
+          spring(dragLift, chestDragging ? chestTarget : 0, dt, chestDragging ? 820 : 200, chestDragging ? 40 : 6);   // 끄는 동안 민첩하게, 놓으면 출렁이며 잦아듦
+          spring(dragShift, chestDragging ? chestShiftTarget : 0, dt, chestDragging ? 700 : 220, chestDragging ? 42 : 7);   // 좌우로 끌면 그 방향으로 따라가고, 놓으면 제자리로 출렁
+          if (!chestDragging && Math.abs(dragShift.x) < 0.0001 && Math.abs(dragShift.v) < 0.001) dragShift.x = dragShift.v = 0;
           if (!chestDragging && Math.abs(dragLift.x) < 0.0001 && Math.abs(dragLift.v) < 0.001) dragLift.x = dragLift.v = 0;
           if (chestDragging) {
             flashExp("squint", 400); flashExp("blush", 400);
@@ -953,8 +963,36 @@
         chest2: ["[하트, 홍조] 자꾸 그러면… 얼굴 빨개지잖아요!", "[하트, 홍조] 으으… 놀리지 말아요…"],
         chest3: ["[하트, 홍조] 너무 부끄러워요… 잠깐만요!"],
         chest_calm: ["[하트, 홍조] 후우… 잠깐 진정할게요."],
-        chest_pull: ["[홍조, ><] 아흣…?!", "[홍조, ><] 히잇…! 뭐, 뭐 하는 거예요…!"],
-        chest_drop: ["[홍조, ><] 꺅!", "[홍조, 눈물] 꺅…! 부, 부끄러워요…!"],
+        chest_pull: [
+          "[홍조, ><] 아흣…?!",
+          "[홍조, ><] 히잇…! 뭐, 뭐 하는 거예요…!",
+          "[홍조, 하트] 으으… 거기… 예민한데…",
+          "[홍조, ><] 자, 잠깐… 그렇게 당기면…!",
+          "[홍조, 식은땀] 하앗…! 손… 힘 좀 빼 주세요…",
+          "[홍조, 하트] 으… 그렇게 만지면… 몸에 힘이 안 들어가요…",
+          "[홍조, ><] 주, 주인님…! 거긴 잡아당기지 마세요…!",
+          "[홍조, 하트] 하아… 일부러 그러시죠…?",
+        ],
+        chest_pull_long: [
+          "[홍조, 하트] 하아… 아직도… 계속하실 거예요…?",
+          "[홍조, ><] 으으… 이러다간… 진짜 이상해져요…",
+          "[홍조, 하트] 잠깐… 그만… 몸이 녹아내릴 것 같아요…",
+          "[홍조, 식은땀] 하앗… 손 떼 주세요… 이러다… 소리 지를지도…",
+          "[홍조, 하트] 주인님… 너무해요… 이런 건… 반칙이에요…",
+          "[홍조, ><] 히으… 계속 그러시면… 저… 어떻게든 돼요…",
+          "[홍조, 하트] 으… 머리가… 하얘져서… 아무것도 안 보여요…",
+          "[홍조, 얄미운] 하아… 이렇게까지 하실 거면서… 놀리기만 하시고…",
+        ],
+        chest_drop: [
+          "[홍조, ><] 꺅!",
+          "[홍조, 눈물] 꺅…! 부, 부끄러워요…!",
+          "[홍조, 하트] 하아… 갑자기 놓으면… 어지러워요…",
+          "[홍조, 식은땀] 아… 아직… 감각이 안 돌아와요…",
+          "[홍조, ><] 으으… 다리 힘이… 풀려 버렸잖아요…",
+          "[홍조, 하트] 잠깐만… 숨 좀 돌릴게요…",
+          "[홍조, 눈물] 부, 부끄러워서… 얼굴을 못 들겠어요…",
+          "[홍조, 얄미운] …이번엔 봐드린 거예요… 다음엔 안 봐줘요…",
+        ],
         lower1: ["[홍조, 식은땀] 거, 거기는 안 돼요!", "[홍조, 식은땀] 치마는 만지면 안 돼요…"],
         lower2: ["[홍조, ><] 진짜 화낼 거예요!", "[홍조, ><] 으으… 그만해요…"],
         lower3: ["[><, 식은땀] 히익…!"],
@@ -1359,13 +1397,30 @@
         return cx >= r.l && cx <= r.r && cy >= r.t && cy <= r.b;
       };
       const walking = () => walk.phase === "out" || walk.phase === "away" || walk.phase === "in";   // 출발한 뒤 ~ 제자리 도착 전
-      const canPullChest = (now) => bodyW <= 0.5 && fleeX === 0 && !walk.phase && intro.phase === "done" && !drag.on && !link.opening && now >= inputLockedUntil && now >= sulkUntil;
+      // 가슴 끌기는 놓은 직후 부끄러워 떠는 동안에도 바로 다시 잡을 수 있다 (inputLockedUntil은 머리 터치에만 적용)
+      const canPullChest = (now) => bodyW <= 0.5 && fleeX === 0 && !walk.phase && intro.phase === "done" && !drag.on && !link.opening && now >= sulkUntil;
+      // 3초 넘게 잡은 채로 '흔들어야' 더 자극적인 대사가 나온다 (잡고만 있으면 나오지 않음)
+      const armChestLong = () => {
+        clearInterval(chestLongTimer);
+        const startedAt = performance.now();
+        chestShake.acc = 0; chestShake.last = 0; chestShake.next = startedAt + 3000;
+        chestLongTimer = setInterval(() => {
+          if (!chestDragging) { clearInterval(chestLongTimer); chestLongTimer = 0; return; }
+          const now = performance.now();
+          if (now < chestShake.next) return;                                   // 최소 3초는 잡고 있어야
+          if (now - chestShake.last > 500 || chestShake.acc < 30) return;      // 그 사이 흔들지 않았으면 대사 없음
+          speak("chest_pull_long", 4000);
+          chestShake.acc = 0; chestShake.next = now + 3000;                    // 계속 흔들면 3초마다 한 번씩
+        }, 300);
+      };
       const releaseChest = () => {
         chestFrom = null;
         if (!chestDragging) return;
-        chestDragging = false; chestTarget = 0;
+        chestDragging = false; chestTarget = 0; chestShiftTarget = 0;
+        clearInterval(chestLongTimer);   // 더 이상 붙잡고 있지 않으니 자극적인 대사 감시도 끔
         const now = performance.now();
-        dragLift.v = Math.min(0, dragLift.v);   // 놓는 즉시 아래로 떨어짐
+        const dropped = Math.max(0, dragLift.x);
+        dragLift.v = Math.min(0, dragLift.v) - dropped * 2.5;   // 놓는 순간 끌어올린 만큼 아래로 탄력이 붙어 크게 출렁인 뒤 잦아듦
         speak("chest_drop", 3500); shiverStarted = now;
         coverChest(3000); inputLockedUntil = now + 2500; walk.lastTouch = now;
       };
@@ -1402,14 +1457,23 @@
           if (!chestDragging) {
             if (dy < -12 && Math.abs(dy) > Math.abs(dx) && canPullChest(now)) {
               chestDragging = true; shy.count = 0; headClicks = []; clicks = [];
+              cover.until = 0;   // 다시 잡았으면 가슴을 가리던 팔을 내린다 (떠는 중 재입력 대응)
               drag.pending = null;   // 가슴 끌기로 넘어가면 집어 옮기기는 취소 (펫 창은 놓을 때까지 클릭을 계속 받음)
               walk.lastTouch = now; speak("chest_pull", 3000);
+              armChestLong();   // 3초 넘게 붙잡고 있으면 자극적인 대사로
               flashExp("squint", 400); flashExp("blush", 400);
             } else if (Math.hypot(dx, dy) >= 6 && !(dy < 0 && Math.abs(dy) > Math.abs(dx))) chestFrom = null;   // 위가 아닌 쪽으로 움직이면 평소 끌기
             else { e.preventDefault(); return; }
           }
           if (chestDragging) {
-            chestTarget = 1 - Math.exp(-Math.max(0, -dy / curK) / 140);
+            const up = Math.max(0, -dy / curK);
+            chestTarget = 1 - Math.exp(-up / 85);   // 조금만 끌어올려도 크게 반응
+            // 마우스를 좌우로 움직이면 그 방향으로 가슴이 끌려간다 (끌어올린 만큼 좌우로도 크게)
+            chestShiftTarget = clamp(dx / (curK * 110), -1, 1) * (0.45 + 0.55 * Math.min(1, chestTarget * 1.4));
+            // 흔든 양을 누적 (잡고만 있는 것과 구분 — 이 값이 있어야 3초 뒤 긴 대사가 나온다)
+            const moved = Math.hypot(dx - chestShake.x, dy - chestShake.y);
+            chestShake.x = dx; chestShake.y = dy;
+            if (moved > 1) { chestShake.acc += moved; chestShake.last = now; }
             e.preventDefault(); e.stopPropagation(); swallowClick = true;
             return;
           }
