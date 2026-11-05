@@ -2412,7 +2412,9 @@
       setInterval(() => {
         const nowRunning = !!document.querySelector(UI.stop);
         const kind = document.querySelector(UI.approval + ', [class*="Zf6DNq_card"]') ? "approval"
-          : document.querySelector('[class*="Nksazq_card"], [class*="wnLwla_card"]') ? "question" : null;
+          // 질문 카드 클래스명은 셸 빌드마다 해시가 바뀌어 곧 죽은 셀렉터가 된다. 셸이 안정적으로 내보내는
+          // data 속성을 먼저 보고, 구버전 셸을 위해 기존 해시도 함께 남긴다.
+          : document.querySelector('[data-question-reply], [data-question-key], [class*="Nksazq_card"], [class*="wnLwla_card"]') ? "question" : null;
         const cfg = window.__dscSleep || {};
         SLEEP.enabled = !PET && cfg.enabled !== false;
         const cfgMin = Number(cfg.minutes);

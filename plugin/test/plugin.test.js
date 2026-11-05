@@ -68,7 +68,7 @@ test('sleep cancels departures, protects intro and wakes for waiting cards', asy
     const halfway = read('fleeX'); assert(halfway > 0)
     events.get('pointermove')(); assert.equal(read('fleeX'), halfway)
     frame(); frame(); assert.equal(read('fleeX'), 0); assert.equal(read('SLEEP.state'), 'active')
-    for (const trigger of ['work', 'disable', 'approval', 'Nksazq_card']) {
+    for (const trigger of ['work', 'disable', 'approval', 'data-question-reply']) {
       read('sleepGo()')
       if (trigger === 'work') working = true
       else if (trigger === 'disable') context.window.__dscSleep.enabled = false
@@ -78,7 +78,7 @@ test('sleep cancels departures, protects intro and wakes for waiting cards', asy
       frame(); working = false; card = null; context.window.__dscSleep.enabled = true; poll()
       timers.clear()
     }
-    for (const waiting of ['approval', 'Nksazq_card']) {
+    for (const waiting of ['approval', 'data-question-reply']) {
       read('sleepGo()'); depart(); frame(); frame(); frame(); frame()
       assert.equal(read('SLEEP.state'), 'asleep'); assert.equal(stopped, true)
       card = waiting; poll()
