@@ -9,11 +9,86 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
+import { execFileSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import vm from 'node:vm'
 import { JSDOM } from 'jsdom'
-import { apply as hostApply, createAssetHandler, ASSET_PATH } from '../host.js'
+import { apply as hostApply, createAssetHandler, ASSET_PATH, Config } from '../host.js'
 
 const packageName = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8')).name
 const bundle = await readFile(new URL('../../lib/client.js', import.meta.url), 'utf8')
+
+test('source build preserves sleep code and matches the committed bundle', async () => {
+  execFileSync(process.execPath, ['plugin/build.mjs'], { cwd: fileURLToPath(new URL('../../', import.meta.url)) })
+  assert.equal(await readFile(new URL('../../lib/client.js', import.meta.url), 'utf8'), bundle)
+  assert.match(bundle, /sleep_out:/)
+  assert.match(bundle, /sleep_back:/)
+  assert.match(bundle, /'절전' : 'Power saving'/)
+  assert.match(bundle, /sharedTicker: false/)
+  assert.match(bundle, /autoUpdate: false/)
+  assert.match(bundle, /model.update\(Math.min\(app.ticker.deltaMS, 100\)\)/)
+})
+
+test('sleep cancels departures, protects intro and wakes for waiting cards', async () => {
+  const source = await readFile(new URL('../../assets/dsc.js', import.meta.url), 'utf8')
+  for (const code of [source, bundle]) {
+    let now = 100000, timerId = 0, poll, stopped = false, card = null, working = false
+    const timers = new Map(), frames = [], events = new Map(), lines = []
+    const context = vm.createContext({
+      performance: { now: () => now }, innerWidth: 1000,
+      setTimeout: (fn) => { timers.set(++timerId, fn); return timerId },
+      clearTimeout: (id) => timers.delete(id),
+      requestAnimationFrame: (fn) => frames.push(fn), setInterval: (fn) => { poll = fn },
+      addEventListener: (type, fn, options) => { assert.equal(options.capture, true); events.set(type, fn) },
+      canvas: { style: {}, getBoundingClientRect: () => ({ left: 700 }) },
+      bubble: { style: {}, classList: { contains: () => false } },
+      app: { ticker: { start: () => { stopped = false }, stop: () => { stopped = true } } },
+      document: { hidden: false, querySelector: (selector) => selector === 'stop' ? working : selector.includes(card) && card },
+      window: { __dscSleep: { enabled: true, minutes: 0.5 } },
+      UI: { stop: 'stop', approval: 'approval' }, intro: { phase: 'center' }, walk: { phase: '' },
+      speak: (line) => lines.push(line), say: (line) => lines.push(line), hush() {}, place() {},
+      setExp() {}, setMood() {}, play() {}, mutterCheck() {}, flashExp() {},
+      TEXT: { approval: 'approval', question: 'question' },
+    })
+    vm.runInContext('let fleeX = 0, running = false, waitingKind = null, lastSayAt = 0, lastError = 0;', context)
+    vm.runInContext(code.slice(code.indexOf('      const WALK_SPEED'), code.indexOf('      const walkBack')), context)
+    vm.runInContext(code.slice(code.indexOf('      const SLEEP ='), code.indexOf('      const onLower')), context)
+    const pollStart = code.indexOf('      setInterval(() => {', code.indexOf('window.__dsc ='))
+    vm.runInContext(code.slice(pollStart, code.indexOf('      }, 400);', pollStart) + '      }, 400);'.length), context)
+    const read = (s) => vm.runInContext(s, context)
+    const frame = () => { now += 500; frames.splice(0).forEach((fn) => fn()) }
+    const depart = () => { const pending = [...timers.values()]; timers.clear(); pending.forEach((fn) => fn()) }
+    read('sleepGo()'); assert.equal(read('SLEEP.state'), 'active')
+    read('intro.phase = "done"; sleepGo()'); assert.equal(timers.size, 1)
+    events.get('pointerdown')(); assert.equal(timers.size, 0)
+    frame(); assert.equal(read('SLEEP.state'), 'active'); assert.equal(read('fleeX'), 0)
+    read('sleepGo()'); depart(); frame()
+    const halfway = read('fleeX'); assert(halfway > 0)
+    events.get('pointermove')(); assert.equal(read('fleeX'), halfway)
+    frame(); frame(); assert.equal(read('fleeX'), 0); assert.equal(read('SLEEP.state'), 'active')
+    for (const trigger of ['work', 'disable', 'approval', 'Nksazq_card']) {
+      read('sleepGo()')
+      if (trigger === 'work') working = true
+      else if (trigger === 'disable') context.window.__dscSleep.enabled = false
+      else card = trigger
+      poll(); assert.equal(read('SLEEP.state'), 'waking')
+      assert.equal(timers.size, 0)
+      frame(); working = false; card = null; context.window.__dscSleep.enabled = true; poll()
+      timers.clear()
+    }
+    for (const waiting of ['approval', 'Nksazq_card']) {
+      read('sleepGo()'); depart(); frame(); frame(); frame(); frame()
+      assert.equal(read('SLEEP.state'), 'asleep'); assert.equal(stopped, true)
+      card = waiting; poll()
+      assert.equal(read('SLEEP.state'), 'waking'); assert.equal(stopped, false)
+      const expected = waiting === 'approval' ? 'approval' : 'question'
+      assert.equal(read('waitingKind'), expected); assert.equal(lines.at(-1), expected)
+      frame(); frame(); frame(); frame()
+      assert.equal(lines.at(-1), expected)
+      card = null; poll()
+    }
+  }
+})
 
 function clientHarness(initial = {}, status = 'ready') {
   const dom = new JSDOM('<!doctype html><html><head></head><body data-ds-dark-theme></body></html>', { url: 'http://127.0.0.1/', runScripts: 'outside-only', pretendToBeVisual: true })
@@ -67,6 +142,74 @@ function clientHarness(initial = {}, status = 'ready') {
   }
   return { dom, client, ctx, languages, dictionaries, resolveModel, form, pages, get appCreated() { return appCreated }, get appDestroyed() { return appDestroyed }, get selected() { return selected } }
 }
+
+test('shortcut handles repeats, matching keyup, blur, permissions, failures and disposal', async () => {
+  const h = clientHarness({ character: false, theme: false, translation: false })
+  try {
+    let calls = 0, mode = 'ok', writable = true
+    const snapshot = h.form.getSnapshot
+    h.form.getSnapshot = () => ({ ...snapshot(), writable })
+    h.form.set = async () => {
+      calls++
+      if (mode === 'throw') throw new Error('save failed')
+      return mode !== 'false'
+    }
+    let warnings = 0
+    h.dom.window.console.warn = () => { warnings++ }
+    const ctx = h.ctx(); h.client.apply(ctx)
+    const key = async (type = 'keydown', extra = {}, target = h.dom.window) => {
+      const event = new h.dom.window.KeyboardEvent(type, { key: 'D', code: 'KeyD', ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true, ...extra })
+      target.dispatchEvent(event)
+      await new Promise((resolve) => setImmediate(resolve))
+      return event
+    }
+    assert.equal((await key()).defaultPrevented, true); assert.equal(calls, 1)
+    await key('keyup', { key: 'Shift', code: 'ShiftLeft' })
+    await key(); assert.equal(calls, 1)
+    await key('keyup')
+    await key('keydown', { repeat: true }); assert.equal(calls, 1)
+    await key(); assert.equal(calls, 2)
+    h.dom.window.dispatchEvent(new h.dom.window.Event('blur'))
+    await key(); assert.equal(calls, 3)
+    await key('keyup')
+    writable = false; await key(); assert.equal(calls, 3)
+    writable = true
+    h.form.update({}, 'loading'); await key(); assert.equal(calls, 3)
+    h.form.update({ character: false, theme: false, translation: false })
+    const input = h.dom.window.document.createElement('input')
+    h.dom.window.document.body.append(input)
+    await key('keydown', {}, input); assert.equal(calls, 3)
+    await key('keydown', { metaKey: true }); assert.equal(calls, 3)
+    for (mode of ['false', 'throw']) { await key(); await key('keyup') }
+    assert.equal(warnings, 2)
+    let resolveSave
+    h.form.set = () => { calls++; return new Promise((resolve) => { resolveSave = resolve }) }
+    await key(); const pendingCalls = calls
+    await key('keyup'); await key(); assert.equal(calls, pendingCalls)
+    resolveSave(true); await new Promise((resolve) => setImmediate(resolve))
+    await key(); assert.equal(calls, pendingCalls + 1)
+    resolveSave(true); await new Promise((resolve) => setImmediate(resolve))
+    ctx.dispose()
+    await key('keyup'); h.dom.window.dispatchEvent(new h.dom.window.Event('blur'))
+    await key(); assert.equal(calls, pendingCalls + 1)
+    assert.equal(h.dom.window.__dscSleep, undefined)
+  } finally { h.dom.window.close() }
+})
+
+test('sleep minutes are bounded in schema and client settings', () => {
+  assert.equal(Config.dict.idleSleepMinutes.meta.min, 0.5)
+  assert.equal(Config.dict.idleSleepMinutes.meta.max, 60)
+  assert.equal(Config.dict.idleSleepMinutes.meta.default, 1)
+  const h = clientHarness({ character: false, theme: false, translation: false })
+  try {
+    const ctx = h.ctx(); h.client.apply(ctx)
+    for (const [value, expected] of [[undefined, 1], [NaN, 1], [Infinity, 1], [-1, 0.5], [0.5, 0.5], [60, 60], [100, 60]]) {
+      h.form.update({ character: false, theme: false, translation: false, idleSleepMinutes: value })
+      assert.equal(h.dom.window.__dscSleep.minutes, expected)
+    }
+    ctx.dispose()
+  } finally { h.dom.window.close() }
+})
 
 test('client registers Korean independently, mounts once, and rolls back on disable during model load', async () => {
   const h = clientHarness()
@@ -206,7 +349,7 @@ test('stored disabled values do not flash features while configuration is loadin
   } finally { h.dom.window.close() }
 })
 
-test('plugin settings page exposes three independently checked switches', () => {
+test('plugin settings page exposes feature and power saving switches', () => {
   const h = clientHarness({ character: true, theme: false, translation: false })
   try {
     const ctx = h.ctx(); h.client.apply(ctx)
@@ -218,6 +361,9 @@ test('plugin settings page exposes three independently checked switches', () => 
     assert.match(html, /Character and speech bubbles/)
     assert.match(html, /Pastel theme/)
     assert.match(html, /Korean language pack/)
+    assert.match(html, /aria-label="Power saving"/)
+    assert.match(html, /aria-label="Shortcut"/)
+    assert.match(html, /min="0.5" max="60"/)
     ctx.dispose()
   } finally { h.dom.window.close() }
 })

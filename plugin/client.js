@@ -13,6 +13,10 @@ const OUTFIT_FIELDS = [
 ]
 const BODY_TYPES = [['default', '기본 체형', 'Default'], ['type1', '체형 1', 'Body type 1'], ['type2', '체형 2 (꼬마)', 'Body type 2 (chibi)']]
 const React = require('react')
+const sleepMinutes = (value) => {
+  const n = Number(value ?? 1)
+  return Number.isFinite(n) ? Math.min(60, Math.max(0.5, n)) : 1
+}
 
 function createLifetime() {
   let stopped = false
@@ -317,6 +321,8 @@ function settingsPage(ctx, form, updater) {
       ['translation', ko ? '한국어 언어팩' : 'Korean language pack'],
     ]
     const change = async (field, checked) => {
+      const current = form.getSnapshot()
+      if (current.status !== 'ready' || !current.writable) return
       setError(''); setPending(true)
       try {
         if (!await form.set(field, checked)) setError(ko ? '설정을 저장하지 못했습니다.' : 'Could not save settings.')
@@ -342,6 +348,20 @@ function settingsPage(ctx, form, updater) {
         ...BODY_TYPES.map(([value, koLabel, enLabel]) => React.createElement('label', { key: value, style: { display: 'flex', alignItems: 'center', gap: 10 } },
           React.createElement('input', { type: 'radio', name: 'deepseek-harness-kr-body', checked: bodyType === value, disabled: off, onChange: () => change('bodyType', value) }),
           React.createElement('span', null, ko ? koLabel : enLabel)))),
+      React.createElement('section', { 'aria-label': ko ? '절전' : 'Power saving', style: { display: 'grid', gap: 10, borderTop: '1px solid rgba(127,127,127,.25)', paddingTop: 14 } },
+        React.createElement('strong', null, ko ? '절전' : 'Power saving'),
+        React.createElement('label', { style: row },
+          React.createElement('span', null, ko ? '입력이 없으면 잠시 쉬기 (화면 밖으로 나가 렌더링을 멈춤)' : 'Rest when idle (leaves the screen and stops rendering)'),
+          React.createElement('input', { type: 'checkbox', role: 'switch', checked: state.value?.idleSleep !== false, disabled: off, onChange: (event) => change('idleSleep', event.target.checked) })),
+        React.createElement('label', { style: row },
+          React.createElement('span', null, ko ? '쉬기 전 대기 시간 (분)' : 'Idle minutes before resting'),
+          React.createElement('input', { type: 'number', min: 0.5, max: 60, step: 0.5, style: { width: 90 }, value: sleepMinutes(state.value?.idleSleepMinutes), disabled: off, onChange: (event) => change('idleSleepMinutes', sleepMinutes(event.target.value)) }))),
+      React.createElement('section', { 'aria-label': ko ? '단축키' : 'Shortcut', style: { display: 'grid', gap: 10, borderTop: '1px solid rgba(127,127,127,.25)', paddingTop: 14 } },
+        React.createElement('strong', null, ko ? '단축키' : 'Shortcut'),
+        React.createElement('label', { style: row },
+          React.createElement('span', null, ko ? '캐릭터 토글 단축키 (비우면 사용 안 함)' : 'Toggle character shortcut (empty to disable)'),
+          React.createElement('input', { type: 'text', placeholder: 'Ctrl+Shift+D', style: { width: 150 }, value: state.value?.characterToggleKey ?? 'Ctrl+Shift+D', disabled: off,
+            onChange: (event) => change('characterToggleKey', event.target.value) }))),
       error ? React.createElement('p', { role: 'alert' }, error) : null,
       updateSection(updater, ko))
   }
@@ -387,9 +407,49 @@ function apply(ctx) {
       reconcile('character', value.character !== false, startCharacter)
       // 캐릭터는 매 프레임 이 값을 읽어 소품·옷·체형을 바로 바꾼다 (다시 띄우지 않음)
       window.__dscOutfit = Object.fromEntries([...OUTFIT_FIELDS.map(([field]) => [field, value[field] === true]), ['bodyType', value.bodyType || 'default']])
+      // 절전 설정도 실시간으로 전달 (캐릭터의 상태 감시 인터벌이 읽음)
+      window.__dscSleep = { enabled: value.idleSleep !== false, minutes: sleepMinutes(value.idleSleepMinutes) }
     }
-    life.add(() => { delete window.__dscOutfit })
+    life.add(() => { delete window.__dscOutfit; delete window.__dscSleep })
     life.add(form.subscribe(sync))
+    // 단축키로 캐릭터 토글: 설정의 character 스위치를 뒤집는다 (설정 화면과 같은 저장소·같은 마운트/정리 경로)
+    let heldToggleKey = '', togglePending = false
+    const toggleListener = async (event) => {
+      if (event.repeat) return
+      const snapshot = form.getSnapshot()
+      const combo = String(snapshot.value?.characterToggleKey ?? 'Ctrl+Shift+D').trim()
+      if (!combo) return
+      const mods = { ctrl: false, shift: false, alt: false, meta: false }
+      let key = null
+      for (const p of combo.split('+').map((s) => s.trim()).filter(Boolean)) {
+        const l = p.toLowerCase()
+        if (l === 'ctrl' || l === 'control') mods.ctrl = true
+        else if (l === 'shift') mods.shift = true
+        else if (l === 'alt') mods.alt = true
+        else if (l === 'meta' || l === 'cmd') mods.meta = true
+        else key = l
+      }
+      if (!key) return
+      // 텍스트 입력 중엔 발동하지 않게 (글자를 지우는 Shift+화살표 같은 조합 보호)
+      const el = event.target
+      if (el && (el.isContentEditable || /^(input|textarea|select)$/i.test(el.tagName))) return
+      const want = [mods.ctrl && 'ctrl', mods.alt && 'alt', mods.shift && 'shift', mods.meta && 'meta', key].filter(Boolean).join('+')
+      const got = [event.ctrlKey && 'ctrl', event.altKey && 'alt', event.shiftKey && 'shift', event.metaKey && 'meta', event.key.toLowerCase()].filter(Boolean).join('+')
+      if (got !== want) return
+      event.preventDefault()
+      if (heldToggleKey || togglePending || snapshot.status !== 'ready' || !snapshot.writable) return
+      heldToggleKey = event.code || event.key.toLowerCase()
+      togglePending = true
+      try {
+        if (!await form.set('character', snapshot.value?.character === false)) console.warn('캐릭터 설정 저장 실패')
+      } catch { console.warn('캐릭터 설정 저장 실패') }
+      finally { togglePending = false }
+    }
+    life.listen(window, 'keydown', toggleListener)
+    life.listen(window, 'keyup', (event) => {
+      if ((event.code || event.key.toLowerCase()) === heldToggleKey) heldToggleKey = ''
+    })
+    life.listen(window, 'blur', () => { heldToggleKey = '' })
     life.add(ctx.slots.inject('plugins.row.config', () => ctx.slots.register({
       name: 'plugins.row.config', key: PLUGIN_ID + '#' + ENTRY_ID,
     }, settingsPage(ctx, form, updater))))
