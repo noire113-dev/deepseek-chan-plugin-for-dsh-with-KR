@@ -201,7 +201,7 @@ export function createPetManager({ assets, exe = electronExecutable(), platform 
       if (!supported) return
       await start()
       seq = Number.isInteger(body?.seq) ? body.seq : undefined
-      write({ type: 'open', from: body?.from, to: body?.to, follow: body?.follow === true, seq })
+      write({ type: 'open', from: body?.from, to: body?.to, follow: body?.follow === true, grab: body?.grab, seq })   // grab: 따라오기에서 커서가 몸을 잡은 자리
     },
     send(list) { if (Array.isArray(list) && state !== 'none') write({ type: 'cmd', list }) },
     hide() { if (state !== 'none') write({ type: 'hide' }) },

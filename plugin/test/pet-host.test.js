@@ -274,6 +274,10 @@ test('mac pet process gets a unix socket, accepts one connection and cleans up o
   assert.equal(pet.status().state, 'hidden')
   await pet.open({ seq: 2, from: { k: 1, x: 1, y: 2 }, to: { k: 1, x: 3, y: 4 } }); await sleep(100)
   assert.deepEqual(JSON.parse(received.join('').trim()), { type: 'open', from: { k: 1, x: 1, y: 2 }, to: { k: 1, x: 3, y: 4 }, follow: false, seq: 2 })
+  // 따라오기: 커서가 몸을 잡은 자리(grab)도 그대로 전달해야 펫 창에서 잡은 위치가 유지됨
+  received.length = 0
+  await pet.open({ seq: 3, from: { k: 1, x: 1, y: 2 }, to: { k: 1, x: 1, y: 2 }, follow: true, grab: { x: 136, y: 146 } }); await sleep(100)
+  assert.deepEqual(JSON.parse(received.join('').trim()).grab, { x: 136, y: 146 })
   // 붙은 뒤에는 소켓이 닫혀 다른 프로세스는 연결할 수 없음
   const late = connect(sockPath); await once(late, 'error')
   socket.destroy(); c.emit('exit'); await sleep(50)
@@ -313,4 +317,15 @@ test('펫 창이 숨으면 페이지에 그리기 중지를 알리고, 페이지
   assert.match(main, /toPage\(\{ type: 'power', on: false \}\)/)
   assert.match(dsc, /m\.type === "power"/)
   assert.match(dsc, /처음엔 숨은 채 대기/)
+})
+
+test('펫 창 따라오기: 커서는 펫 프로세스가 직접 읽어 페이지로 보내고, 창 안 캐릭터는 위치를 HTTP로 보내지 않는다', async () => {
+  const main = await readFile(new URL('../../pet/main.cjs', import.meta.url), 'utf8')
+  const dsc = await readFile(new URL('../../assets/dsc.js', import.meta.url), 'utf8')
+  assert.match(main, /case 'track': track\(!!message\.on, message\.grab, message\.off\)/)
+  assert.match(main, /win\.setPosition\([^\n]*\) \| 0[\s\S]*toPage\(\{ type: 'cursor'/)   // 창은 커서를 읽는 즉시 여기서 옮김 (페이지 왕복 없음)
+  assert.match(dsc, /petTracking/)   // 따라오는 동안 페이지는 창을 옮기지 않음
+  assert.match(main, /screen\.getCursorScreenPoint\(\)[\s\S]*toPage\(\{ type: 'cursor'/)
+  assert.match(dsc, /grab: \{ x: drag\.pending\?\.ox \?\? 0/)
+  assert.ok(!dsc.includes('["follow", item]'), '따라오는 동안 위치를 HTTP로 보내면 왕복 지연만큼 끊긴다')
 })

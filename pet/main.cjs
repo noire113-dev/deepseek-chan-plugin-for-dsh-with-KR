@@ -31,7 +31,7 @@ let pageReady = false
 const pending = []
 const toPage = (message) => { if (!win || win.isDestroyed()) return; if (pageReady) win.webContents.send('dsc', message); else pending.push(message) }
 const inside = (root, file) => { const rel = path.relative(root, file); return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel) }
-const hide = () => { if (win && !win.isDestroyed() && win.isVisible()) { win.hide(); setAccept(false); toHost({ type: 'hidden' }) } toPage({ type: 'power', on: false }); reloadIfStale() }
+const hide = () => { if (win && !win.isDestroyed() && win.isVisible()) { win.hide(); setAccept(false); toHost({ type: 'hidden' }) } track(false); toPage({ type: 'power', on: false }); reloadIfStale() }
 // 클릭 받기: 평소엔 뒤 화면으로 통과시키고, 커서가 캐릭터 몸 영역(box, 창 안 좌표) 안이거나 누르고 끄는 중(force)일 때만 받음.
 // 커서 위치는 여기서 직접 읽음 (Windows에서 클릭 통과 중 마우스 이동 전달(forward)이 창을 옮긴 뒤 끊겨 다시 못 집는 일이 있어서)
 let box = null, force = false, accepting = false
@@ -44,6 +44,25 @@ function checkCursor() {
   setAccept(p.x >= b.x + box.l && p.x <= b.x + box.r && p.y >= b.y + box.t && p.y <= b.y + box.b)
 }
 setInterval(checkCursor, 30)
+// 따라오기: 창 안 캐릭터가 끌어낼 때 창 위치는 여기서 커서를 읽는 즉시 옮김 (페이지로 보내 다음 프레임에 계산해 되돌려 받으면
+// 프레임마다 위치가 밀리거나 건너뛰어 끊겨 보임). 페이지에는 몸 흔들림 계산용으로 커서만 알려 줌. grab = 커서가 몸을 잡은 자리, off = 창 안 몸 왼쪽 위 좌표
+let tracker = null
+function track(on, grab, off) {
+  if (!on) { clearInterval(tracker); tracker = null; return }
+  if (tracker) return
+  const g = { x: Number(grab?.x) || 0, y: Number(grab?.y) || 0 }, o = { x: Number(off?.x) || 0, y: Number(off?.y) || 0 }
+  let last = ''
+  const tick = () => {
+    if (!win || win.isDestroyed()) return
+    const p = screen.getCursorScreenPoint(), key = `${p.x},${p.y}`
+    if (key === last) return
+    last = key
+    win.setPosition(Math.round(p.x - g.x - o.x) | 0, Math.round(p.y - g.y - o.y) | 0)   // | 0: -0 방지 (아래 move와 같은 이유)
+    toPage({ type: 'cursor', x: p.x, y: p.y })
+  }
+  tick()   // 창을 보이기 전에 먼저 커서 자리로 (잠깐 엉뚱한 자리에 떠 보이지 않게)
+  tracker = setInterval(tick, 4)
+}
 // 캐릭터 코드(assets/dsc.js)가 바뀌면(플러그인 업데이트·재설치) 숨어 있을 때 페이지를 새로 불러옴. 떠 있는 동안 바뀌면 다음에 숨을 때.
 // (펫 프로세스는 DSH가 꺼질 때까지 남아 있어서, 안 그러면 창 안 캐릭터만 새 코드로 돌고 펫 창은 옛 코드로 돎)
 let stale = false
@@ -88,6 +107,7 @@ app.whenReady().then(() => {
     switch (message.type) {
       // | 0: Math.round 결과가 -0이면 Electron이 정수로 받지 못해 오류 창을 띄움
       case 'move': if (Number.isFinite(message.x) && Number.isFinite(message.y)) win.setPosition(Math.round(message.x) | 0, Math.round(message.y) | 0); return
+      case 'track': track(!!message.on, message.grab, message.off); return
       case 'press': force = !!message.on; checkCursor(); return   // 누르고 있는 동안은 커서가 몸 밖이어도 늘 받음
       case 'hitbox': box = message.box && ['l', 't', 'r', 'b'].every((k) => Number.isFinite(message.box[k])) ? message.box : null; checkCursor(); return
       // 이미 보이는 중이어도(따라오기 회차에서 바로 던지기 회차로 넘어간 경우) 지금 회차로 shown을 다시 알림

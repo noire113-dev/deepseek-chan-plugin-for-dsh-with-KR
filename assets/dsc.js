@@ -365,11 +365,13 @@
       let lastClip = "";
       let lastMask = "";
       const petWin = { x: NaN, y: NaN };
+      let petTracking = false, petGrab = null;   // petGrab: 따라오는 중 커서가 몸을 잡은 자리   // 펫 프로세스가 커서를 직접 따라 창을 옮기는 중 (이때 여기서 창을 옮기면 서로 밀어 끊김)
       let petBox = "";   // 펫 창: 마지막으로 알린 몸 영역
       const movePet = (pose) => {   // 펫 창: 캔버스는 창 아래 가운데, 창을 화면 좌표로 옮김
         const cx = (innerWidth - W * pose.k) / 2, cy = innerHeight - H * pose.k;
         const wx = Math.round(pose.x - cx), wy = Math.round(pose.y - cy);
-        if (wx !== petWin.x || wy !== petWin.y) { petWin.x = wx; petWin.y = wy; PET.move(wx, wy); }
+        if (petTracking) petWin.x = petWin.y = NaN;   // 끝난 뒤 다시 계산한 자리로 옮기게
+        else if (wx !== petWin.x || wy !== petWin.y) { petWin.x = wx; petWin.y = wy; PET.move(wx, wy); }
         return { x: cx, y: cy };
       };
       const place = () => {
@@ -1265,7 +1267,13 @@
           document.documentElement.classList.add("dsc-grabbing");
           until.sweat = Infinity;   // 들고 있는 동안 식은땀
           walk.lastTouch = now;
+          if (PET) {   // 펫 창을 직접 끌 때도 창은 펫 프로세스가 커서를 읽는 즉시 옮김 (이벤트 → 페이지 계산 → 되돌려 받는 왕복은 몇 프레임 늦고 끊김)
+            petGrab = { x: p.ox, y: p.oy }; petTracking = true;
+            drag.x = px - p.ox; drag.y = py - p.oy; drag.samples = [[now, px, py]];
+            PET.send({ type: "track", on: true, grab: petGrab, off: { x: (innerWidth - W * free.k) / 2, y: innerHeight - H * free.k } });
+          }
         }
+        if (PET && petTracking) { e.preventDefault(); return; }   // 이후 위치·속도는 펫 프로세스가 보내는 cursor 메시지로 갱신
         drag.x = px - p.ox; drag.y = py - p.oy;
         drag.samples.push([now, px, py]);
         while (drag.samples.length > 2 && now - drag.samples[0][0] > 100) drag.samples.shift();
@@ -1288,18 +1296,10 @@
             if (now - link.peek > 250) { link.peek = now; if (link.petState === "none") linkPost("warm"); else poll(); }
             return;
           }
-          link.follow = { shown: false, pose: null, busy: false }; link.last = "";
-          linkPost("open", { from: pose, to: pose, follow: true, seq: ++link.seq });
-          return;
+          link.follow = { shown: false }; link.last = "";
+          linkPost("open", { from: pose, to: pose, follow: true, grab: { x: drag.pending?.ox ?? 0, y: drag.pending?.oy ?? 0 }, seq: ++link.seq });   // grab: 커서가 몸을 잡은 자리 (몸 위치 = 커서 − grab)
         }
-        const f = link.follow;
-        f.pose = [pose, carry.vx, carry.vy];
-        const sendLatest = () => {
-          if (link.follow !== f || !f.pose || f.busy) return;
-          const item = f.pose; f.pose = null; f.busy = true;
-          linkPost("send", { list: [["follow", item]] }).finally(() => { f.busy = false; sendLatest(); });
-        };
-        sendLatest();
+        // 열린 뒤 위치는 보내지 않음: 펫 프로세스가 커서를 직접 읽어 따라옴 (HTTP 왕복은 수십~수백 ms 걸려 끌 때 끊김)
       };
       // 손을 놓을 때 펫 창이 따라오던 중이면: 창 밖이면 펫 창이 이어받고, 창 안으로 돌아왔으면 펫 창을 숨기고 창 안에서 이어 감
       const finishFollow = (vx, vy) => {
@@ -1319,6 +1319,7 @@
         if (PET) PET.press(false);
         if (!drag.on) { if (!cancel && p.h) onTouch(p.h[0], p.h[1], p.h[2]); return; }   // 끌지 않고 뗌 = 터치 (그림 위에서 눌렀을 때만)
         drag.on = false;
+        if (PET && petTracking) { petTracking = false; petGrab = null; PET.send({ type: "track", on: false }); }   // 이제부터 창 이동은 다시 페이지가 맡음 (놓은 뒤 미끄러짐·붙기)
         try { document.documentElement.releasePointerCapture(e.pointerId); } catch {}
         document.documentElement.classList.remove("dsc-grabbing");
         until.sweat = performance.now() + 400;
@@ -1515,7 +1516,16 @@
       if (PET) {
         const local = { say, play, setMood, flashExp, setExp, hush };
         PET.on((m) => {
-          if (m.type === "power") {   // 창이 숨으면 그리기를 멈춰 CPU·GPU를 쓰지 않음 (숨은 창도 백그라운드 제한이 꺼져 있어 계속 그려짐)
+          if (m.type === "cursor") {   // 따라오는 중 커서 (화면 좌표). 몸 위치 = 커서 − 잡은 자리
+            if (!drag.on || !petGrab) return;
+            const now = performance.now();
+            drag.x = m.x - petGrab.x; drag.y = m.y - petGrab.y;
+            drag.samples.push([now, m.x, m.y]);
+            while (drag.samples.length > 2 && now - drag.samples[0][0] > 100) drag.samples.shift();
+            const [t0, x0, y0] = drag.samples[0], dt = Math.max(16, now - t0) / 1000;
+            carry.vx += ((m.x - x0) / dt - carry.vx) * 0.5; carry.vy += ((m.y - y0) / dt - carry.vy) * 0.5;
+          } else if (m.type === "power") {   // 창이 숨으면 그리기를 멈춰 CPU·GPU를 쓰지 않음 (숨은 창도 백그라운드 제한이 꺼져 있어 계속 그려짐)
+            if (!m.on) { petTracking = false; petGrab = null; }
             try { m.on ? app.ticker.start() : app.ticker.stop(); } catch {}
           } else if (m.type === "open") {   // 창 밖으로 던진 자리에서 나타나 남은 거리만큼 미끄러짐. follow면 놓을 때까지 창 안 커서를 따라옴
             try { app.ticker.start(); } catch {}
@@ -1523,7 +1533,9 @@
             for (const t of walk.timers) clearTimeout(t);
             walk.timers = []; walk.slideId++; walk.phase = ""; fleeX = 0; drag.pending = null; PET.press(false);
             petDocked = false; free.on = true; Object.assign(free, m.from);
-            drag.on = !!m.follow; drag.x = m.from.x; drag.y = m.from.y; drag.samples = [[performance.now(), 0, 0]];
+            petGrab = m.follow ? (m.grab || { x: 0, y: 0 }) : null; petTracking = !!m.follow;
+            PET.send({ type: "track", on: !!m.follow, grab: petGrab, off: { x: (innerWidth - W * m.from.k) / 2, y: innerHeight - H * m.from.k } });   // 따라오기: 펫 프로세스가 커서를 따라 창을 옮기고 커서를 보내 줌
+            drag.on = !!m.follow; drag.x = m.from.x; drag.y = m.from.y; drag.samples = [[performance.now(), m.from.x + (petGrab?.x ?? 0), m.from.y + (petGrab?.y ?? 0)]];
             free.anim = m.follow ? null : { t0: performance.now(), ms: 300, from: m.from, to: keepIn(m.to), snap: false };
             until.sweat = m.follow ? Infinity : 0;
             movePet(m.from); PET.send({ type: "placed" });
@@ -1535,9 +1547,8 @@
               if (fn === "outfit") window.__dscOutfit = a[0];
               else if (fn === "dock") petDock = a[0];
               else if (fn === "voice") voiceState = a[0];
-              else if (fn === "follow" && drag.on) {   // 창 안에서 끄는 자리 (화면 좌표)
-                drag.x = a[0].x; drag.y = a[0].y; carry.vx = a[1]; carry.vy = a[2]; drag.samples = [[performance.now(), 0, 0]];
-              } else if (fn === "release" && drag.on) {   // 창 밖에서 놓음 → 여기서 이어서 미끄러지거나 붙음
+              else if (fn === "release" && drag.on) {   // 창 밖에서 놓음 → 여기서 이어서 미끄러지거나 붙음
+                petGrab = null; petTracking = false; PET.send({ type: "track", on: false });
                 drag.on = false; until.sweat = performance.now() + 400; release(a[0], a[1]);
               } else if (Object.hasOwn(local, fn) && Array.isArray(a)) local[fn](...a);
             }
