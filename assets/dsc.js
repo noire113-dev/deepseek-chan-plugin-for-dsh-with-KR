@@ -134,6 +134,9 @@
       // 펫 창(전신) 배율과, 창 안↔펫 창의 머리 크기 비율 (붙을 때·넘길 때 같은 비율을 쓴다)
       const sFull = Math.min((W * 0.98) / (maxX - minX), (H * 0.95) / (maxY - minY));
       const PET_HEAD_RATIO = sBust / sFull;
+      // 펫 창 배율 범위. 상한은 '화면에 들어가는 만큼'뿐이고, 창 크기는 캐릭터에 맞춰 스스로 바뀐다 (pet/main.cjs 의 fit)
+      const PET_K_MIN = 0.45, PET_BUBBLE = 150;
+      const PET_K_MAX = Math.max(1.2, ((typeof screen !== "undefined" && screen.availHeight ? screen.availHeight : 1080) - PET_BUBBLE) / H);
       // 허리(잘린 단면) 기준 정렬용 값. 펫 창과 창 안은 배율이 달라 캔버스 안 허리 높이도 다르다
       const BUST_CX = (ux0 + ux1) / 2, FULL_CX = (minX + maxX) / 2;   // 모델 좌표에서 상반신·전신의 가로 중심
       const WAIST_PET = H * 0.05 + (cutY - minY) * sFull;   // 펫 창 캔버스(k=1)에서 허리 y
@@ -304,7 +307,9 @@
       };
       const homePose = () => {
         const card = findCard();
-        const maxK = Math.min(1.25, (innerHeight * 0.45) / visH);
+        // 창 여유 공간에 맞춰 커진다. 상한은 창 높이의 92%와, 펫 창이 그대로 따라갈 수 있는 배율(PET_K_MAX / PET_HEAD_RATIO) 중 작은 쪽
+        //  (펫 창이 따라가지 못하는 크기로 키우면 창 밖으로 나갈 때 크기가 튀므로 그 선을 넘지 않게 한다)
+        const maxK = Math.min(PET_K_MAX / PET_HEAD_RATIO, (innerHeight * 0.92) / visH);
         let k = maxK;
         const r = card ? cardRect(card) : null;
         if (r) k = Math.min(maxK, Math.max((innerWidth - r.right - 8) / visW, (innerHeight - r.bottom - 10) / visH));
@@ -408,6 +413,7 @@
       let lastClip = "";
       let lastMask = "", lastMaskComposite = "";
       const petWin = { x: NaN, y: NaN };
+      let petWinSize = { w: 0, h: 0 };   // 펫 창: 캐릭터 크기에 맞춰 요청한 창 크기 (pet/main.cjs 가 실제로 조절)
       let petTracking = false, petGrab = null;   // petGrab: 따라오는 중 커서가 몸을 잡은 자리   // 펫 프로세스가 커서를 직접 따라 창을 옮기는 중 (이때 여기서 창을 옮기면 서로 밀어 끊김)
       let petBox = "";   // 펫 창: 마지막으로 알린 몸 영역
       const movePet = (pose) => {   // 펫 창: 캔버스는 창 아래 가운데, 창을 화면 좌표로 옮김
@@ -453,6 +459,12 @@
         const loose = PET || dock !== home;   // 자유 위치·펫 창: 말풍선 꼬리가 머리 위에 오게
         if (PET) {
           ({ x, y } = movePet(dock));
+          // 창 크기를 캐릭터에 맞춘다 (배율 상한이 없으므로 화면에 들어가는 만큼 창도 커진다)
+          const needW = Math.ceil(W * k) + 24, needH = Math.ceil(H * k) + PET_BUBBLE;
+          if (needW !== petWinSize.w || needH !== petWinSize.h) {
+            petWinSize.w = needW; petWinSize.h = needH;
+            PET.send({ type: "fit", w: needW, h: needH });
+          }
           // 클릭을 받을 몸 영역(창 안 좌표)을 펫 프로세스에 알려 줌. 커서가 이 안에 있는지는 펫 프로세스가 직접 확인 (산책·도망 중엔 없음)
           const r = bodyRect(x, y, k), b = walking() || fleeX !== 0 ? null : { l: Math.round(r.l), t: Math.round(r.t), r: Math.round(r.r), b: Math.round(r.b) };
           const sig = JSON.stringify(b);
@@ -1598,9 +1610,8 @@
         if (!walking() && overBody(e.clientX, e.clientY)) PET.menu();
       }, true);
       // 휠로 크기 조절: 몸 위에서 올리면 커지고 내리면 작아짐 (몸 아래 가운데를 기준으로). 들고 있을 때·움직이는 중·산책·도망 중엔 무시
-      //   펫 창 = 0.45~2.8배 (넘겨받을 때는 HEAD_GAIN으로 머리 크기를 창 안과 맞춤. 2.8배면 전신 840px)
+      //   펫 창 = 0.45배 ~ 화면에 들어가는 크기 (넘겨받을 때는 HEAD_GAIN으로 머리 크기를 창 안과 맞춤)
       //   창 안 = 자유 위치일 때만 0.42배~그 창에 들어가는 최대치. 제자리에 붙어 있으면 크기는 자동이라 휠은 대화 스크롤 그대로
-      const PET_K_MIN = 0.45, PET_K_MAX = 2.8, PET_BUBBLE = 150;   // PET_BUBBLE: 머리 위 말풍선 자리(px)
       document.addEventListener("wheel", (e) => {
         if (intro.phase !== "done" || !free.on || !overBody(e.clientX, e.clientY)) return;
         e.preventDefault(); e.stopPropagation();   // 캐릭터 위에서는 대화 스크롤 대신 크기 조절
@@ -1806,7 +1817,8 @@
             // 펫 창은 전신이라 같은 배율이면 머리가 작아진다. 창 안 배율과의 비율(HEAD_GAIN)만큼 키워 머리 크기를 맞추고,
             // 창(과 화면)에 들어가는 크기로 자른다. 아래 가운데를 고정한 채 배율만 바꾼다
             const kFrom = Number(m.from.k) || 1;
-            const kFit = Math.min(PET_K_MAX, (innerHeight - PET_BUBBLE) / H, (screen.availHeight - PET_BUBBLE) / H);
+            // 창 크기는 이제 고정이 아니라 캐릭터에 맞춰 바뀌므로, 화면에 들어가는지만 본다
+            const kFit = Math.min(PET_K_MAX, (screen.availHeight - PET_BUBBLE) / H, (screen.availWidth - 40) / W);
             const kTo = Math.min(kFit, Math.max(PET_K_MIN, kFrom * HEAD_GAIN));
             if (kTo !== kFrom) {
               const dk = kFrom - kTo;
