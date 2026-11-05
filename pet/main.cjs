@@ -12,7 +12,9 @@ const OWN = '/__app'   // dscpet://assets 아래에서 이 앱 폴더를 가리�
 const WIN_W = 440, WIN_H = 540   // 캐릭터(최대 375px)와 머리 위 말풍선이 들어가는 크기
 
 const MAC = process.platform === 'darwin'
-if (!PIPE || !ASSETS) app.exit(1)
+const SECRET = process.env.DSC_PET_SECRET
+delete process.env.DSC_PET_SECRET
+if (!PIPE || !ASSETS || !SECRET) app.exit(1)
 app.setName('DeepSeekChan Pet')
 if (MAC) {
   app.setActivationPolicy('accessory')                 // Dock·앱 전환기에 안 나타남 (번들 Info.plist 의 LSUIElement 와 겹쳐 둠)
@@ -123,9 +125,12 @@ app.whenReady().then(() => {
   })
 
   socket = connect(PIPE)
+  // 연결 대기 중에도 인증을 첫 메시지로 예약한다.
+  socket.write(JSON.stringify({ type: 'auth', secret: SECRET }) + '\n')
   socket.setEncoding('utf8')
   socket.on('data', (chunk) => {
     buffer += chunk
+    if (Buffer.byteLength(buffer) > 1024 * 1024) { socket.destroy(); return }
     for (let i; (i = buffer.indexOf('\n')) >= 0;) {
       const line = buffer.slice(0, i); buffer = buffer.slice(i + 1)
       let message; try { message = JSON.parse(line) } catch { continue }

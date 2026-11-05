@@ -171,7 +171,7 @@ test('pet manager supports darwin only for an .app bundle executable', () => {
   assert.equal(createPetManager({ assets: 'x', exe: 'C:/dsh.exe', platform: 'win32' }).status().supported, true)
 })
 
-test('mac pet runtime clones a small ad-hoc signed bundle and keeps the pet app outside the signature', async () => {
+test('mac pet runtime clones a small ad-hoc signed bundle and keeps the pet app outside the signature', posixOnly, async () => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-kr-pet-'))
   try {
     const exe = await fakeDshApp(root), app = join(root, 'pet'), base = join(root, 'runtime'), out = join(base, 'electron', 'DeepSeekChanPet.app')
@@ -216,7 +216,7 @@ test('mac pet runtime clones a small ad-hoc signed bundle and keeps the pet app 
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 
-test('mac pet runtime falls back to a plain copy when APFS clone is unavailable', async () => {
+test('mac pet runtime falls back to a plain copy when APFS clone is unavailable', posixOnly, async () => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-kr-pet-'))
   try {
     const exe = await fakeDshApp(root), app = join(root, 'pet')
@@ -228,7 +228,7 @@ test('mac pet runtime falls back to a plain copy when APFS clone is unavailable'
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 
-test('mac pet runtime stops at a failed signature and does not leave a stamp', async () => {
+test('mac pet runtime stops at a failed signature and does not leave a stamp', posixOnly, async () => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-kr-pet-'))
   try {
     const exe = await fakeDshApp(root), app = join(root, 'pet'), base = join(root, 'runtime')
@@ -243,6 +243,7 @@ test('pet endpoint is a named pipe on Windows and a short private unix socket pa
   const pipe = await createEndpoint('win32')
   assert.match(pipe.path, /^\\\\\.\\pipe\\dsc-pet-\d+-[0-9a-f-]{36}$/)
   await pipe.cleanup()
+  if (process.platform === 'win32') return
   const unix = await createEndpoint('darwin')
   try {
     assert.ok(Buffer.byteLength(unix.path) < 104)
@@ -270,6 +271,7 @@ test('mac pet process gets a unix socket, accepts one connection and cleans up o
   // 펫이 연결해 ready 를 보내면 hidden, 호스트가 보내는 open 은 한 줄 JSON 으로 도착
   const socket = connect(sockPath); await once(socket, 'connect')
   const received = []; socket.setEncoding('utf8'); socket.on('data', (d) => received.push(d))
+  socket.write(JSON.stringify({ type: 'auth', secret: opts.env.DSC_PET_SECRET }) + '\n')
   socket.write(JSON.stringify({ type: 'ready' }) + '\n'); await sleep(100)
   assert.equal(pet.status().state, 'hidden')
   await pet.open({ seq: 2, from: { k: 1, x: 1, y: 2 }, to: { k: 1, x: 3, y: 4 } }); await sleep(100)

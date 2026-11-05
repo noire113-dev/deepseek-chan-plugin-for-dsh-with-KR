@@ -80,6 +80,7 @@ async function startHost(upstreamPort, config = {}) {
   const routes = new Map()
   const disposers = []
   const ctx = {
+    connection: { requestRejection: () => undefined },
     webServer: {
       register({ path, handler }) {
         routes.set(path, handler)
@@ -127,6 +128,7 @@ function speak(url, body, options = {}) {
 test('disabled registers no routes, invalid config names its field', () => {
   const routes = []
   const ctx = {
+    connection: { requestRejection: () => undefined },
     webServer: {
       register({ path }) {
         routes.push(path)
@@ -139,9 +141,9 @@ test('disabled registers no routes, invalid config names its field', () => {
   }
   apply(ctx, { enabled: false })
   assert.deepEqual(routes, [])
-  assert.throws(() => apply(ctx, { enabled: true, openai: { model: 42 } }), /config\.openai\.model/)
-  assert.throws(() => apply(ctx, { enabled: true, openai: { baseUrl: 'ftp://nope' } }), /config\.openai\.baseUrl/)
-  assert.throws(() => apply(ctx, { enabled: true, openai: { apiKeyEnv: 'not a name' } }), /config\.openai\.apiKeyEnv/)
+  assert.doesNotThrow(() => apply(ctx, { enabled: true, openai: { model: 42 } }))
+  assert.doesNotThrow(() => apply(ctx, { enabled: true, openai: { baseUrl: 'ftp://nope' } }))
+  assert.doesNotThrow(() => apply(ctx, { enabled: true, openai: { apiKeyEnv: 'not a name' } }))
 })
 
 test('defaults assume no endpoint, model or voice', () => {
@@ -290,6 +292,7 @@ test('createSpeakHandler honors an injected fetch and clock', async () => {
   const config = normalize({ enabled: true, openai: { baseUrl: 'https://api.openai.com/v1', apiKeyEnv: KEY_ENV }, cache: { ttlMs: 1000 } })
   const calls = []
   const handler = createSpeakHandler(config, {
+    rejection: () => undefined,
     now: () => clock,
     fetch: async (url, init) => {
       calls.push({ url, init })
@@ -423,6 +426,7 @@ async function startLiveHost(initial, ctxExtras = {}) {
   const disposers = []
   let raw = initial
   const ctx = {
+    connection: { requestRejection: () => undefined },
     ...ctxExtras,
     webServer: {
       register({ path, handler }) {

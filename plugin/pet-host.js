@@ -6,7 +6,7 @@
 // - 연결: 창 안 캐릭터 ↔ 호스트 = DSH 웹 서버의 /deepseek-harness-kr/pet/*,
 //   호스트 ↔ 펫 프로세스 = Windows 이름 있는 파이프 · macOS unix 소켓 (JSON 한 줄씩)
 import { execFile, spawn } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
+import { randomUUID, randomBytes, timingSafeEqual } from 'node:crypto'
 import { copyFile, link, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
@@ -156,12 +156,13 @@ const defaultBase = (platform = process.platform) => platform === 'darwin'
  * 펫 프로세스 하나를 관리한다. 처음 끌 때 숨긴 채로 띄워 두고(warm), 창 밖으로 던지면 보여 준다(open).
  * 붙으면 창 안 캐릭터가 숨김을 요청하고 프로세스는 남아 다음에 바로 뜬다. 호스트가 내려가면 파이프가 끊겨 펫도 끝난다.
  */
-export function createPetManager({ assets, exe = electronExecutable(), platform = process.platform, base = defaultBase(platform), app = PET_APP, spawnImpl = spawn, prepare = prepareRuntime, readyTimeout = READY_TIMEOUT } = {}) {
+export function createPetManager({ assets, exe = electronExecutable(), platform = process.platform, base = defaultBase(platform), app = PET_APP, spawnImpl = spawn, prepare = prepareRuntime, readyTimeout = READY_TIMEOUT, authTimeout = 5000 } = {}) {
   const supported = supportedOn(platform, exe)
   // seq: 마지막으로 연 회차 (새로 불러온 화면이 이어받음), disposed: 플러그인이 내려감 (시작 도중이면 펫을 띄우지 않음)
   let child = null, server = null, socket = null, starting = null, state = 'none', seq, disposed = false, endpoint = null
   let readyTimer = null   // 띄운 펫이 ready를 보내지 않으면(시작 도중 멈춤) 끝내고 다음 시도에 맡김
   const events = [], outbox = []
+  const connections = new Set()
   const write = (message) => {
     if (socket) socket.write(JSON.stringify(message) + '\n')
     else if (starting) outbox.push(message)
@@ -178,6 +179,9 @@ export function createPetManager({ assets, exe = electronExecutable(), platform 
   }
   const reset = () => {
     clearTimeout(readyTimer); readyTimer = null
+    for (const s of connections) s.destroy()
+    connections.clear()
+    socket?.destroy()
     child = null; socket = null; starting = null; state = 'none'; outbox.length = 0
     server?.close(); server = null
     endpoint?.cleanup().catch(() => {}); endpoint = null
@@ -185,30 +189,45 @@ export function createPetManager({ assets, exe = electronExecutable(), platform 
   const start = () => starting ??= (async () => {
     const ep = endpoint = await createEndpoint(platform)
     const pipe = ep.path
+    const secret = randomBytes(32).toString('hex')
     server = createServer((s) => {
-      if (socket) { s.destroy(); return }
-      socket = s
-      server.close()   // 연결 지점 이름이 실행 인자에 드러나므로 펫이 붙은 뒤에는 다른 연결을 받지 않음
+      if (socket || disposed) { s.destroy(); return }
+      connections.add(s)
+      const timer = setTimeout(() => s.destroy(), authTimeout)
       s.setEncoding('utf8')
-      let buffer = ''
+      let buffer = '', authenticated = false
       s.on('data', (chunk) => {
         buffer += chunk
         for (let i; (i = buffer.indexOf('\n')) >= 0;) {
           const line = buffer.slice(0, i); buffer = buffer.slice(i + 1)
-          try { onMessage(JSON.parse(line)) } catch {}
+          if (Buffer.byteLength(line) > 1024 * 1024) { s.destroy(); return }
+          let message
+          try { message = JSON.parse(line) } catch { s.destroy(); return }
+          if (!authenticated) {
+            const token = Buffer.from(typeof message?.secret === 'string' ? message.secret : '')
+            const expected = Buffer.from(secret)
+            if (socket || message?.type !== 'auth' || token.length !== expected.length || !timingSafeEqual(token, expected)) { s.destroy(); return }
+            authenticated = true; clearTimeout(timer); socket = s
+            server?.close()
+            for (const other of connections) if (other !== s) other.destroy()
+            for (const pending of outbox.splice(0)) write(pending)
+          } else onMessage(message)
         }
+        if (Buffer.byteLength(buffer) > 1024 * 1024) s.destroy()
       })
-      s.on('close', () => { if (socket === s) socket = null })
+      s.on('close', () => { clearTimeout(timer); connections.delete(s); if (socket === s) socket = null })
       s.on('error', () => {})
-      for (const message of outbox.splice(0)) write(message)
     })
+
     // 리슨 전에 닫히면(시작 도중 dispose) 리슨 콜백이 오지 않으므로 close로도 끝냄
     const srv = server
     await new Promise((resolve, reject) => { srv.once('error', reject); srv.once('close', () => reject(new Error('disposed'))); srv.listen(pipe, resolve) })
     if (disposed) throw new Error('disposed')
     const bin = await prepare(exe, base, app)
     if (disposed) throw new Error('disposed')
-    const c = child = spawnImpl(bin, [`--dsc-pipe=${pipe}`, `--dsc-assets=${assets}`], petSpawn(platform))
+    const options = petSpawn(platform)
+    options.env.DSC_PET_SECRET = secret
+    const c = child = spawnImpl(bin, [`--dsc-pipe=${pipe}`, `--dsc-assets=${assets}`], options)
     if (platform === 'darwin' && c?.pid) lowerPriority(c.pid)
     state = 'starting'
     // 지금 회차 번호를 붙여, 창 안 쪽이 이전 회차에 쌓인 종료 알림으로 진행 중인 따라오기를 끊지 않게 함. 이미 다른 프로세스로 바뀌었으면 무시

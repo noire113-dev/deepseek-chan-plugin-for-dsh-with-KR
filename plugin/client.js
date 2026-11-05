@@ -14,6 +14,10 @@ const OUTFIT_FIELDS = [
 ]
 const BODY_TYPES = [['default', '기본 체형', 'Default'], ['type1', '체형 1', 'Body type 1'], ['type2', '체형 2 (꼬마)', 'Body type 2 (chibi)']]
 const React = require('react')
+const sleepMinutes = (value) => {
+  const n = Number(value ?? 1)
+  return Number.isFinite(n) ? Math.min(60, Math.max(0.5, n)) : 1
+}
 
 function createLifetime() {
   let stopped = false
@@ -125,7 +129,7 @@ function startCharacter(life) {
       if (previous === undefined) delete window.__dsc
       else window.__dsc = previous
     }
-    document.documentElement.classList.remove('dsc-hover')
+    document.documentElement.classList.remove('dsc-hover', 'dsc-grabbing')
   })
   stylesheet(life, 'character.css')
   // 캐릭터를 끄거나 플러그인이 내려가면 바깥 펫 창도 숨김 (이 화면에서 펫 창을 쓴 적이 있을 때만)
@@ -332,7 +336,7 @@ const fieldStyle = { display: 'grid', gap: 4 }
 const inputStyle = { width: '100%', boxSizing: 'border-box' }
 
 // 입력 중에는 초안을 들고 있다가, 포커스를 벗어나거나 Enter를 누르면 저장한다.
-function TtsField({ label, hint, value, placeholder, disabled, multiline, type, commit }) {
+function TtsField({ label, hint, value, placeholder, disabled, multiline, type, min, max, step, commit }) {
   const shown = value ?? ''
   const [draft, setDraft] = React.useState(shown)
   const [error, setError] = React.useState('')
@@ -345,7 +349,7 @@ function TtsField({ label, hint, value, placeholder, disabled, multiline, type, 
   const onKeyDown = (event) => { if (!multiline && event.key === 'Enter') event.currentTarget.blur() }
   const input = React.createElement(multiline ? 'textarea' : 'input', {
     style: inputStyle, value: draft, placeholder, disabled, type: multiline ? undefined : (type || 'text'), rows: multiline ? 3 : undefined,
-    spellCheck: false, onChange: (event) => setDraft(event.target.value), onBlur: save, onKeyDown,
+    min, max, step, spellCheck: false, onChange: (event) => setDraft(event.target.value), onBlur: save, onKeyDown,
   })
   return React.createElement('label', { style: fieldStyle },
     React.createElement('span', null, label),
@@ -425,13 +429,13 @@ function TtsSection({ form, keys, ko, writable, tts }) {
     commit: (draft) => { const parsed = parseJsonObject(draft, ko); return parsed.error ? parsed.error : write(path, parsed.value) },
   })
   const number = (path, label, value, min, extra = {}) => text(path, label, {
-    type: 'number', value: value === undefined ? '' : String(value), ...extra,
-    commit: (draft) => { const n = Number(draft); return Number.isInteger(n) && n >= min ? write(path, n) : t(min + ' 이상의 정수를 넣어 주세요.', 'Enter a whole number of at least ' + min + '.') },
+    type: 'number', min, max: extra.max, step: 1, value: value === undefined ? '' : String(value), ...extra,
+    commit: (draft) => { const n = Number(draft); return Number.isInteger(n) && n >= min && n <= (extra.max ?? Infinity) ? write(path, n) : t(min + '~' + extra.max + ' 범위의 정수를 넣어 주세요.', 'Enter a whole number from ' + min + ' to ' + extra.max + '.') },
   })
   // 화면에서는 초, 저장은 ms.
   const seconds = (path, label, ms) => text(path, label, {
-    type: 'number', value: ms === undefined ? '' : String(ms / 1000),
-    commit: (draft) => { const n = Number(draft); return Number.isFinite(n) && n >= 1 ? write(path, Math.round(n * 1000)) : t('1초 이상으로 넣어 주세요.', 'Enter at least 1 second.') },
+    type: 'number', min: 1, max: 600, step: 0.001, value: ms === undefined ? '' : String(ms / 1000),
+    commit: (draft) => { const n = Number(draft); return Number.isFinite(n) && n >= 1 && n <= 600 ? write(path, Math.round(n * 1000)) : t('1~600초로 넣어 주세요.', 'Enter 1 to 600 seconds.') },
   })
   const check = (path, label, checked) => React.createElement('label', { key: path.join('.'), style: toggleRow },
     React.createElement('span', null, label),
@@ -448,7 +452,7 @@ function TtsSection({ form, keys, ko, writable, tts }) {
     ttsGroup(t('목소리', 'Voice'),
       text(['openai', 'model'], t('모델', 'Model'), { value: openai.model, placeholder: serverDefault }),
       text(['openai', 'voice'], t('목소리 ID', 'Voice ID'), { value: openai.voice, placeholder: serverDefault }),
-      number(['stream', 'pcmSampleRate'], t('샘플레이트 (Hz)', 'Sample rate (Hz)'), v.stream?.pcmSampleRate, 8000, { hint: t('서버가 보내는 오디오와 같아야 함 (OpenAI 24000 · Fish 44100)', 'Must match the audio the server sends (OpenAI 24000 · Fish 44100)') })),
+      number(['stream', 'pcmSampleRate'], t('샘플레이트 (Hz)', 'Sample rate (Hz)'), v.stream?.pcmSampleRate, 8000, { max: 48000, hint: t('서버가 보내는 오디오와 같아야 함 (OpenAI 24000 · Fish 44100)', 'Must match the audio the server sends (OpenAI 24000 · Fish 44100)') })),
     ttsGroup(t('읽을 대사', 'Lines to read'),
       ...VOICE_LINES.map(([field, koLabel, enLabel]) => check(['voiceLines', field], ko ? koLabel : enLabel, v.voiceLines?.[field] === true))),
     React.createElement('details', { style: groupStyle },
@@ -514,6 +518,8 @@ function settingsPage(ctx, form, updater, keys) {
       ['translation', ko ? '한국어 언어팩' : 'Korean language pack'],
     ]
     const change = async (field, checked) => {
+      const current = form.getSnapshot()
+      if (current.status !== 'ready' || !current.writable) return
       setError(''); setPending(true)
       try {
         if (!await form.set(field, checked)) setError(ko ? '설정을 저장하지 못했습니다.' : 'Could not save settings.')
@@ -539,6 +545,20 @@ function settingsPage(ctx, form, updater, keys) {
         ...BODY_TYPES.map(([value, koLabel, enLabel]) => React.createElement('label', { key: value, style: { display: 'flex', alignItems: 'center', gap: 10 } },
           React.createElement('input', { type: 'radio', name: 'deepseek-harness-kr-body', checked: bodyType === value, disabled: off, onChange: () => change('bodyType', value) }),
           React.createElement('span', null, ko ? koLabel : enLabel)))),
+      React.createElement('section', { 'aria-label': ko ? '절전' : 'Power saving', style: { display: 'grid', gap: 10, borderTop: '1px solid rgba(127,127,127,.25)', paddingTop: 14 } },
+        React.createElement('strong', null, ko ? '절전' : 'Power saving'),
+        React.createElement('label', { style: row },
+          React.createElement('span', null, ko ? '입력이 없으면 잠시 쉬기 (화면 밖으로 나가 렌더링을 멈춤)' : 'Rest when idle (leaves the screen and stops rendering)'),
+          React.createElement('input', { type: 'checkbox', role: 'switch', checked: state.value?.idleSleep !== false, disabled: off, onChange: (event) => change('idleSleep', event.target.checked) })),
+        React.createElement('label', { style: row },
+          React.createElement('span', null, ko ? '쉬기 전 대기 시간 (분)' : 'Idle minutes before resting'),
+          React.createElement('input', { type: 'number', min: 0.5, max: 60, step: 0.5, style: { width: 90 }, value: sleepMinutes(state.value?.idleSleepMinutes), disabled: off, onChange: (event) => change('idleSleepMinutes', sleepMinutes(event.target.value)) }))),
+      React.createElement('section', { 'aria-label': ko ? '단축키' : 'Shortcut', style: { display: 'grid', gap: 10, borderTop: '1px solid rgba(127,127,127,.25)', paddingTop: 14 } },
+        React.createElement('strong', null, ko ? '단축키' : 'Shortcut'),
+        React.createElement('label', { style: row },
+          React.createElement('span', null, ko ? '캐릭터 토글 단축키 (비우면 사용 안 함)' : 'Toggle character shortcut (empty to disable)'),
+          React.createElement('input', { type: 'text', placeholder: 'Ctrl+Shift+D', style: { width: 150 }, value: state.value?.characterToggleKey ?? 'Ctrl+Shift+D', disabled: off,
+            onChange: (event) => change('characterToggleKey', event.target.value) }))),
       error ? React.createElement('p', { role: 'alert' }, error) : null,
       React.createElement(TtsSection, { form, keys, ko, writable: state.writable, tts: state.value?.tts }),
       updateSection(updater, ko))
@@ -603,9 +623,49 @@ function apply(ctx) {
       window.__dscOutfit = Object.fromEntries([...OUTFIT_FIELDS.map(([field]) => [field, value[field] === true]), ['bodyType', value.bodyType || 'default']])
       keys.setRef(value.tts?.openai?.apiKeyEnv ?? DEFAULT_KEY_REF)
       syncTts(value)
+      // 절전 설정도 실시간으로 전달 (캐릭터의 상태 감시 인터벌이 읽음)
+      window.__dscSleep = { enabled: value.idleSleep !== false, minutes: sleepMinutes(value.idleSleepMinutes) }
     }
-    life.add(() => { delete window.__dscOutfit })
+    life.add(() => { delete window.__dscOutfit; delete window.__dscSleep })
     life.add(form.subscribe(sync))
+    // 단축키로 캐릭터 토글: 설정의 character 스위치를 뒤집는다 (설정 화면과 같은 저장소·같은 마운트/정리 경로)
+    let heldToggleKey = '', togglePending = false
+    const toggleListener = async (event) => {
+      if (event.repeat) return
+      const snapshot = form.getSnapshot()
+      const combo = String(snapshot.value?.characterToggleKey ?? 'Ctrl+Shift+D').trim()
+      if (!combo) return
+      const mods = { ctrl: false, shift: false, alt: false, meta: false }
+      let key = null
+      for (const p of combo.split('+').map((s) => s.trim()).filter(Boolean)) {
+        const l = p.toLowerCase()
+        if (l === 'ctrl' || l === 'control') mods.ctrl = true
+        else if (l === 'shift') mods.shift = true
+        else if (l === 'alt') mods.alt = true
+        else if (l === 'meta' || l === 'cmd') mods.meta = true
+        else key = l
+      }
+      if (!key) return
+      // 텍스트 입력 중엔 발동하지 않게 (글자를 지우는 Shift+화살표 같은 조합 보호)
+      const el = event.target
+      if (el && (el.isContentEditable || /^(input|textarea|select)$/i.test(el.tagName))) return
+      const want = [mods.ctrl && 'ctrl', mods.alt && 'alt', mods.shift && 'shift', mods.meta && 'meta', key].filter(Boolean).join('+')
+      const got = [event.ctrlKey && 'ctrl', event.altKey && 'alt', event.shiftKey && 'shift', event.metaKey && 'meta', event.key.toLowerCase()].filter(Boolean).join('+')
+      if (got !== want) return
+      event.preventDefault()
+      if (heldToggleKey || togglePending || snapshot.status !== 'ready' || !snapshot.writable) return
+      heldToggleKey = event.code || event.key.toLowerCase()
+      togglePending = true
+      try {
+        if (!await form.set('character', snapshot.value?.character === false)) console.warn('캐릭터 설정 저장 실패')
+      } catch { console.warn('캐릭터 설정 저장 실패') }
+      finally { togglePending = false }
+    }
+    life.listen(window, 'keydown', toggleListener)
+    life.listen(window, 'keyup', (event) => {
+      if ((event.code || event.key.toLowerCase()) === heldToggleKey) heldToggleKey = ''
+    })
+    life.listen(window, 'blur', () => { heldToggleKey = '' })
     life.add(ctx.slots.inject('plugins.row.config', () => ctx.slots.register({
       name: 'plugins.row.config', key: PLUGIN_ID + '#' + ENTRY_ID,
     }, settingsPage(ctx, form, updater, keys))))

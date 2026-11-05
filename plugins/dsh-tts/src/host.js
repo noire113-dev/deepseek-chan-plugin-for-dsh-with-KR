@@ -128,9 +128,10 @@ export function statePayload(config) {
  * @param config - normalized config, or a function returning the current one.
  * @returns the route handler.
  */
-export function createStateHandler(config) {
+export function createStateHandler(config, deps = {}) {
   const read = configReader(config)
   return function stateHandler(req, res) {
+    if (rejectRequest(req, res, deps.rejection)) return;
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       sendJson(req, res, 405, { error: { message: 'use GET or HEAD' } }, { allow: 'GET, HEAD' })
       return
@@ -175,6 +176,7 @@ export function createSpeakHandler(config, deps = {}) {
   const cache = deps.cache ?? createCache({ ...read().cache, enabled: true, now: deps.now ?? Date.now })
 
   return async function speakHandler(req, res) {
+    if (rejectRequest(req, res, deps.rejection)) return;
     // A browser that disconnects mid-write emits an error on the response;
     // without a listener that would surface as an uncaught exception.
     res.on('error', () => {})
@@ -299,4 +301,13 @@ export function createSpeakHandler(config, deps = {}) {
       res.off('close', onClientGone)
     }
   }
+}
+
+// 인증 서비스가 없으면 차단한다.
+export function rejectRequest(req, res, rejection = () => 503) {
+  let denied
+  try { denied = rejection(req) } catch { denied = 503 }
+  if (denied === undefined) return false
+  res.writeHead(denied, { 'cache-control': 'no-store' }); res.end()
+  return true
 }

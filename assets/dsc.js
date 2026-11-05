@@ -79,9 +79,11 @@
       const canvas = document.createElement("canvas"); canvas.id = "dsc-stage";
       const bubble = document.createElement("div"); bubble.id = "dsc-bubble";
       document.body.append(canvas, bubble);
-      const app = new PIXI.Application({ view: canvas, width: W, height: H, backgroundAlpha: 0, antialias: true, autoDensity: true, resolution: (devicePixelRatio || 1) * 1.5 });   // 1.5배로 그려 줄여 보여 줌
-      const model = await PIXI.live2d.Live2DModel.from(BASE + "model/model.model3.json", { autoInteract: false, idleMotionGroup: "Idle" });
+      const app = new PIXI.Application({ view: canvas, width: W, height: H, sharedTicker: false, backgroundAlpha: 0, antialias: true, autoDensity: true, resolution: (devicePixelRatio || 1) * 1.5 });   // 1.5배로 그려 줄여 보여 줌
+      const model = await PIXI.live2d.Live2DModel.from(BASE + "model/model.model3.json", { autoUpdate: false, autoInteract: false, idleMotionGroup: "Idle" });
       app.stage.addChild(model);
+      // 전용 티커로 모델도 갱신하고 긴 프레임은 제한
+      app.ticker.add(() => model.update(Math.min(app.ticker.deltaMS, 100)), undefined, PIXI.UPDATE_PRIORITY.HIGH);
       const im = model.internalModel, core = im.coreModel;
       im.eyeBlink = undefined; im.breath = undefined;
 
@@ -467,7 +469,7 @@
           }
         }
       };
-      const raf = () => { place(); requestAnimationFrame(raf); };
+      const raf = () => { if (SLEEP.state !== "asleep") place(); requestAnimationFrame(raf); };
       requestAnimationFrame(raf);
 
       // 말풍선
@@ -826,7 +828,7 @@
             const w = outfitW[key] = (outfitW[key] || 0) + ((of[key] ? 1 : 0) - (outfitW[key] || 0)) * Math.min(1, dt * 6);
             if (w > 0.005) core.addParameterValueById(id, v * w);
           }
-          const walkingBody = walk.phase === "out" || walk.phase === "away" || walk.phase === "in";   // 산책은 꼬마 모습으로 (데스크톱 펫과 같음)
+          const walkingBody = walk.phase === "out" || walk.phase === "away" || walk.phase === "in" || SLEEP.state === "leaving" || SLEEP.state === "waking";   // 산책은 꼬마 모습으로 (데스크톱 펫과 같음)
           basinW += ((now < basinUntil ? 1 : 0) - basinW) * Math.min(1, dt * 4);   // 세숫대야는 천천히 씌우고 천천히 벗음
           if (basinW > 0.005) core.addParameterValueById("key10", basinW);
           bodyW += ((walkingBody ? 1 : BODY_VALUE[of.bodyType] || 0) - bodyW) * Math.min(1, dt * 4);   // 체형은 조금 천천히 바뀜
@@ -873,6 +875,8 @@
         spam: ["[어두운, 얄미운] …그만 좀 눌러요."],
         makeup: ["[홍조] …이제 안 누를 거죠?"],
         working: ["[식은땀] 지금 일하는 중이에요~"],
+        sleep_out: ["잠깐 쉬고 올게요~", "절전 모드 들어갑니다~ 다시 불러 주세요!", "좀 쉬었다 올게요, 주인님♪"],
+        sleep_back: ["다녀왔어요! 다시 화이팅이에요~", "돌아왔어요! 기다리셨죠?", "[하트] 부르셨죠? 돌아왔어요!"],
       };
       const EXP_NAME = { "홍조": "blush", "><": "squint", "하트": "heart", "얄미운": "smug", "식은땀": "sweat", "어두운": "dark", "눈물": "tears" };
       const lastLine = {};
@@ -1039,13 +1043,15 @@
       const walkLater = (fn, ms) => { const id = setTimeout(() => { walk.timers = walk.timers.filter((t) => t !== id); fn(); }, ms); walk.timers.push(id); return id; };
       const slide = (from, to, done) => {
         const t0 = performance.now(), ms = Math.abs(to - from) / WALK_SPEED * 1000, id = ++walk.slideId;
+        let cancelled = false;
         const step = () => {
-          if (id !== walk.slideId) return;   // 멈춤
-          const p = Math.min(1, (performance.now() - t0) / ms);
+          if (cancelled || id !== walk.slideId) return;   // 멈춤
+          const p = ms ? Math.min(1, (performance.now() - t0) / ms) : 1;
           fleeX = from + (to - from) * walkEase(p);
           if (p < 1) requestAnimationFrame(step); else done();
         };
         requestAnimationFrame(step);
+        return () => { cancelled = true; };
       };
       const cancelWalk = () => {   // 출발 전(말하는 중)에 집어 들면 산책을 취소. 출발한 뒤에는 제자리에 올 때까지 집을 수 없음
         if (walk.phase !== "ready") return;
@@ -1062,6 +1068,7 @@
         });
       };
       const startWalk = () => {   // 말하고 → 가까운 쪽으로 돌아서 → 화면 밖까지 걸어감(높이 그대로) → 8~14초 뒤 같은 쪽으로 돌아옴
+        if (SLEEP.state !== "active") return;
         walk.phase = "ready"; walk.dir = nearSide();
         speak("walk_out", 2200);
         walkLater(() => {
@@ -1073,6 +1080,7 @@
         }, 2300);
       };
       walkCheck = (now) => {
+        if (SLEEP.state !== "active") return;   // 절전 중에는 산책하지 않음
         if (walk.phase === "away" && running) return walkBack();   // 나가 있는 동안 작업이 시작되면 바로 돌아옴
         if (walk.phase || now < walk.next) return;
         walk.next = now + 30000;   // 지금은 갈 때가 아니면 30초 뒤 다시 확인
@@ -1081,6 +1089,46 @@
         if (bubble.classList.contains("show") || now - walk.lastTouch < 60000 || now - lastSayAt < 15000 || document.hidden) return;
         walk.next = now + (240 + Math.random() * 240) * 1000;   // 다음 산책은 4~8분 뒤
         startWalk();
+      };
+      // ---------- 절전(슬립): 입력이 없으면 말 한마디 후 오른쪽 화면 밖으로 나가 렌더링(티커)을 멈춤 ----------
+      const SLEEP = { enabled: true, minutes: 1, lastActive: performance.now(), state: "active" };   // active → leaving → asleep → waking
+      let sleepTimer = 0, cancelSleepSlide = null;
+      const SLEEP_OFF = () => innerWidth - (canvas.getBoundingClientRect().left - fleeX) + 40;   // 화면 오른쪽 밖 좌표
+      const startWake = () => {
+        if (SLEEP.state !== "asleep" && SLEEP.state !== "leaving") return;
+        clearTimeout(sleepTimer); sleepTimer = 0;
+        cancelSleepSlide?.(); cancelSleepSlide = null;
+        if (link.open || link.follow?.shown) { SLEEP.state = "active"; fleeX = 0; return; }
+        hush();
+        SLEEP.state = "waking";
+        app.ticker.start();
+        place();
+        slide(fleeX, 0, () => {
+          fleeX = 0; SLEEP.state = "active"; SLEEP.lastActive = performance.now();
+          if (!running && !waitingKind) speak("sleep_back", 3500);
+        });
+      };
+      const sleepActivity = () => {
+        SLEEP.lastActive = performance.now();
+        startWake();
+      };
+      for (const t of (PET ? [] : ["pointerdown", "pointermove", "mousedown", "keydown", "wheel", "touchstart"])) addEventListener(t, sleepActivity, { passive: true, capture: true });
+      const sleepGo = () => {
+        if (PET || drag.on || drag.pending || free.anim || SLEEP.state !== "active" || intro.phase !== "done" || fleeX !== 0 || walk.phase) return;
+        if (link.open || link.follow?.shown) { SLEEP.lastActive = performance.now(); return; }   // 펫 창으로 밖에 꺼내 둔 동안엔 절전 안 함
+        SLEEP.state = "leaving";
+        speak("sleep_out", 2600);
+        sleepTimer = setTimeout(() => {
+          sleepTimer = 0;
+          if (SLEEP.state !== "leaving") return;
+          hush();
+          cancelSleepSlide = slide(fleeX, SLEEP_OFF(), () => {
+            cancelSleepSlide = null;
+            SLEEP.state = "asleep";
+            canvas.style.display = bubble.style.display = "none";
+            app.ticker.stop();   // 렌더·모션 업데이트·Worker 프레임 전부 멈춤
+          });
+        }, 2500);
       };
       const onLower = (now) => {
         if (fleeX !== 0 || now < low.cooldownUntil || now - low.last < 180) return;
@@ -1437,7 +1485,7 @@
 
       // 시작 인사 (가운데 연출 중): 0.7초 뒤 5.8초 동안
       if (!PET) setTimeout(() => { if (!link.open) { say(TEXT.hello, 5800, false, "reaction"); play("sway", 2300); } }, 700);
-      window.__dsc = { say, play, setMood, flashExp, sulking: () => performance.now() < sulkUntil, sulkPeeks: () => sulkPeeks.map((p) => ({ at: Math.round(p.at), flip: p.flip })), walk: () => { if (!walk.phase && fleeX === 0) startWalk(); return walk.phase; }, walking: () => walk.phase, regionAt: (cx, cy) => { const h = hitAt(cx, cy); return h && touchRegion(h[0], h[1], h[2]); }, fleeX: () => fleeX, bubble: () => bubble.classList.contains("show") ? bubble.textContent : "", lines: TEXT, voice: (s) => { voiceState = s && s.speaking !== false ? s : null; } };   // 확인용
+      window.__dsc = { say, play, setMood, flashExp, sulking: () => performance.now() < sulkUntil, sulkPeeks: () => sulkPeeks.map((p) => ({ at: Math.round(p.at), flip: p.flip })), walk: () => { if (!walk.phase && fleeX === 0) startWalk(); return walk.phase; }, walking: () => walk.phase, sleep: () => SLEEP.state, regionAt: (cx, cy) => { const h = hitAt(cx, cy); return h && touchRegion(h[0], h[1], h[2]); }, fleeX: () => fleeX, bubble: () => bubble.classList.contains("show") ? bubble.textContent : "", lines: TEXT, voice: (s) => { voiceState = s && s.speaking !== false ? s : null; } };   // 확인용
 
       // ---------- 바깥 펫 창 연결 (창 안 캐릭터 쪽) ----------
       // 플러그인 호스트가 /deepseek-harness-kr/pet/ 아래에서 펫 프로세스를 띄우고 메시지를 이어 줌 (ASAR 패치 방식에는 없어서 꺼짐)
@@ -1462,6 +1510,7 @@
       const leaveLink = () => {   // 펫 창이 제자리에 붙었거나 닫힘 → 창 안 제자리로
         if (!link.open) { link.opening = 0; return; }   // 아직 안 떴으면 창 안 캐릭터는 그대로
         link.open = false; link.opening = 0; link.queue = [];
+        SLEEP.state = "active"; SLEEP.lastActive = performance.now();
         free.on = false; free.anim = null; saveFree(); lastPlaceKey = "";   // 제자리로 (창이 좁으면 구석, 매 프레임 다시 계산)
         // 창 안 캐릭터가 다시 그려지는 프레임에 바로 펫 창을 숨김 (펫 창이 스스로 숨을 때까지 둘이 겹쳐 보이던 것 방지)
         requestAnimationFrame(() => { if (!link.open && !link.follow) linkPost("hide"); });
@@ -1568,9 +1617,16 @@
       }
       setInterval(() => {
         const nowRunning = !!document.querySelector(UI.stop);
-        if (nowRunning && !waitingKind) mutterCheck();
         const kind = document.querySelector(UI.approval + ', [class*="Zf6DNq_card"]') ? "approval"
           : document.querySelector('[class*="Nksazq_card"], [class*="wnLwla_card"]') ? "question" : null;
+        const cfg = window.__dscSleep || {};
+        SLEEP.enabled = !PET && cfg.enabled !== false;
+        const cfgMin = Number(cfg.minutes);
+        SLEEP.minutes = Number.isFinite(cfgMin) ? Math.min(60, Math.max(0.5, cfgMin)) : 1;
+        // 잠든 동안에도 대기 카드를 확인하고 기존 반응으로 이어감
+        if (nowRunning || kind || !SLEEP.enabled) sleepActivity();
+        if (SLEEP.state === "asleep") return;
+        if (nowRunning && !waitingKind && !kind) mutterCheck();
         if (kind !== waitingKind) {
           waitingKind = kind;
           setExp("sweat", kind === "approval");
@@ -1591,6 +1647,11 @@
             else { flashExp("heart", 4000); flashExp("blush", 4000); say(TEXT.done, 4000, false, "reaction"); setMood("idle"); play("laugh", 1700); }
           }, 600);
         }
+        // 절전 판정: 설정된 시간 동안 입력·작업·대기·화면 전환이 없으면 잠시 쉬러 감
+        if (SLEEP.enabled && SLEEP.state === "active" && !running && !waitingKind && !document.hidden &&
+            performance.now() - SLEEP.lastActive > SLEEP.minutes * 60000 &&
+            performance.now() - lastSayAt > 5000 && !bubble.classList.contains("show"))
+          sleepGo();
       }, 400);
     })().catch((e) => console.warn("DeepSeek짱 캐릭터 로드 실패:", e));
   });

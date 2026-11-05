@@ -25,10 +25,10 @@ export const TtsConfig = z.object({
     extraBody: live(z.dict(z.any()).default({})),
     headers: live(z.dict(z.string()).default({})),
     textPrefix: live(z.string().default('')),
-    timeoutMs: live(z.number().default(30000)),
+    timeoutMs: live(z.number().min(1000).max(600000).step(1).default(30000)),
   }),
   stream: z.object({
-    pcmSampleRate: live(z.number().default(24000)),
+    pcmSampleRate: live(z.number().min(8000).max(48000).step(1).default(24000)),
   }),
   voiceLines: z.object({
     reactions: live(z.boolean().default(true)),
@@ -61,6 +61,11 @@ export const Config = z.object({
   tailHide: z.boolean().default(false).volatile(),
   bodyType: z.union([z.const('default'), z.const('type1'), z.const('type2')]).default('default').volatile(),
   tts: TtsConfig,
+  // 절전: 입력이 없으면 캐릭터가 화면 밖으로 나가 렌더링을 멈춤
+  idleSleep: z.boolean().default(true).volatile(),
+  idleSleepMinutes: z.number().min(0.5).max(60).default(1).volatile(),
+  // 캐릭터 토글 단축키 (비워 두면 단축키 없음). 예: "Ctrl+Shift+D", "Alt+C"
+  characterToggleKey: z.string().default('Ctrl+Shift+D').volatile(),
 })
 export const ASSET_PATH = '/deepseek-harness-kr/assets'
 const assets = fileURLToPath(new URL('../assets/', import.meta.url))

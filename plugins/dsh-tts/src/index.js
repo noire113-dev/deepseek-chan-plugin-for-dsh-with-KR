@@ -8,13 +8,13 @@
  * @module dsh-tts
  */
 import { normalize } from './config.js'
-import { createSpeakHandler, createStateHandler, SPEAK_ROUTE, STATE_ROUTE } from './host.js'
+import { createSpeakHandler, createStateHandler, SPEAK_ROUTE, STATE_ROUTE, rejectRequest } from './host.js'
 
 /** Stable Cordis plugin name; the Loader row id in cordis.patch.yml is 'tts'. */
 export const name = 'dsh-tts'
 
 /** The routes are unreadable without the web server. */
-export const inject = ['webServer']
+export const inject = ['webServer', 'connection']
 
 /**
  * Resolve a key reference through the optional credential store (a stored key
@@ -31,8 +31,9 @@ export function credentialResolver(ctx) {
 }
 
 /** Hide a handler while the live config is disabled; disabled reads as absent. */
-function whileEnabled(read, handler) {
+function whileEnabled(read, handler, rejection) {
   return (req, res) => {
+    if (rejectRequest(req, res, rejection)) return
     let enabled = false
     try {
       enabled = read().enabled === true
@@ -57,20 +58,19 @@ function whileEnabled(read, handler) {
  */
 export function registerSpeechRoutes(ctx, read, deps = {}) {
   ctx.effect(() => {
-    const disposeState = ctx.webServer.register({
-      kind: 'exact',
-      path: STATE_ROUTE,
-      handler: whileEnabled(read, createStateHandler(read)),
-    })
-    const disposeSpeak = ctx.webServer.register({
-      kind: 'exact',
-      path: SPEAK_ROUTE,
-      handler: whileEnabled(read, createSpeakHandler(read, { resolveApiKey: credentialResolver(ctx), ...deps })),
-    })
-    return () => {
-      disposeSpeak()
-      disposeState()
+    const cleanups = []
+    try {
+      read()
+      const rejection = (req) => typeof ctx.connection?.requestRejection === 'function' ? ctx.connection.requestRejection(req) : 503
+      const options = { resolveApiKey: credentialResolver(ctx), ...deps, rejection }
+      const handlers = [[STATE_ROUTE, createStateHandler(read, options)], [SPEAK_ROUTE, createSpeakHandler(read, options)]]
+      for (const [path, handler] of handlers) cleanups.push(ctx.webServer.register({ kind: 'exact', path, handler: whileEnabled(read, handler, rejection) }))
+    } catch {
+      for (const cleanup of cleanups.reverse()) cleanup?.()
+      console.warn('TTS 초기화 실패: 음성을 비활성화합니다.')
+      return
     }
+    return () => { for (const cleanup of cleanups.reverse()) cleanup?.() }
   }, 'dsh-tts: speech routes')
 }
 
@@ -80,7 +80,9 @@ export function registerSpeechRoutes(ctx, read, deps = {}) {
  * @param rawConfig - Loader-row config from cordis.patch.yml.
  */
 export function apply(ctx, rawConfig) {
-  const config = normalize(rawConfig)
-  if (!config.enabled) return
-  registerSpeechRoutes(ctx, () => config)
+  try {
+    const config = normalize(rawConfig)
+    if (!config.enabled) return
+    registerSpeechRoutes(ctx, () => config)
+  } catch { console.warn('TTS 초기화 실패: 음성을 비활성화합니다.') }
 }
