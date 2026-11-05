@@ -133,6 +133,7 @@ function petSpawn(platform, base = process.env) {
   return { env, stdio: 'ignore', windowsHide: false }
 }
 
+const READY_TIMEOUT = 15000   // 보통 2~3초. 이 안에 ready가 없으면 시작 도중 멈춘 것으로 봄 (macOS 서명·보안 정책 변화 등)
 const TASKPOLICY = '/usr/sbin/taskpolicy'
 
 /**
@@ -155,10 +156,11 @@ const defaultBase = (platform = process.platform) => platform === 'darwin'
  * 펫 프로세스 하나를 관리한다. 처음 끌 때 숨긴 채로 띄워 두고(warm), 창 밖으로 던지면 보여 준다(open).
  * 붙으면 창 안 캐릭터가 숨김을 요청하고 프로세스는 남아 다음에 바로 뜬다. 호스트가 내려가면 파이프가 끊겨 펫도 끝난다.
  */
-export function createPetManager({ assets, exe = electronExecutable(), platform = process.platform, base = defaultBase(platform), app = PET_APP, spawnImpl = spawn, prepare = prepareRuntime } = {}) {
+export function createPetManager({ assets, exe = electronExecutable(), platform = process.platform, base = defaultBase(platform), app = PET_APP, spawnImpl = spawn, prepare = prepareRuntime, readyTimeout = READY_TIMEOUT } = {}) {
   const supported = supportedOn(platform, exe)
   // seq: 마지막으로 연 회차 (새로 불러온 화면이 이어받음), disposed: 플러그인이 내려감 (시작 도중이면 펫을 띄우지 않음)
   let child = null, server = null, socket = null, starting = null, state = 'none', seq, disposed = false, endpoint = null
+  let readyTimer = null   // 띄운 펫이 ready를 보내지 않으면(시작 도중 멈춤) 끝내고 다음 시도에 맡김
   const events = [], outbox = []
   const write = (message) => {
     if (socket) socket.write(JSON.stringify(message) + '\n')
@@ -168,12 +170,14 @@ export function createPetManager({ assets, exe = electronExecutable(), platform 
     if (!message || typeof message.type !== 'string') return
     // 시작이 끝났으니 보통 우선순위로. 보일 때도 한 번 더 (나중에 생긴 자식 프로세스까지)
     if ((message.type === 'ready' || message.type === 'shown') && platform === 'darwin' && child?.pid) restorePriority(child.pid).catch(() => {})
+    if (message.type === 'ready') { clearTimeout(readyTimer); readyTimer = null }
     if (message.type === 'ready' || message.type === 'hidden') state = 'hidden'
     else if (message.type === 'shown') state = 'shown'
     if (message.type !== 'ready') events.push(message)
     if (events.length > 100) events.splice(0, events.length - 100)
   }
   const reset = () => {
+    clearTimeout(readyTimer); readyTimer = null
     child = null; socket = null; starting = null; state = 'none'; outbox.length = 0
     server?.close(); server = null
     endpoint?.cleanup().catch(() => {}); endpoint = null
@@ -210,6 +214,11 @@ export function createPetManager({ assets, exe = electronExecutable(), platform 
     // 지금 회차 번호를 붙여, 창 안 쪽이 이전 회차에 쌓인 종료 알림으로 진행 중인 따라오기를 끊지 않게 함. 이미 다른 프로세스로 바뀌었으면 무시
     c.once('exit', () => { if (child !== c) return; reset(); events.push({ type: 'closed', seq }) })
     c.once('error', (error) => { if (child !== c) return; reset(); events.push({ type: 'error', message: error.message, seq }) })
+    readyTimer = setTimeout(() => {
+      if (child !== c || state !== 'starting') return
+      reset(); try { c.kill() } catch {}
+      events.push({ type: 'error', message: 'pet did not become ready', seq })
+    }, readyTimeout)
   })().catch((error) => { const p = child; reset(); p?.kill(); events.push({ type: 'error', message: error.message }); throw error })
   return {
     status(drain = true) { return { supported, state, seq, events: drain ? events.splice(0) : [] } },

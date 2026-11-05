@@ -350,3 +350,22 @@ test('웜업: 시작 인사·작업 중에는 미루고 한가할 때 숨긴 펫
   assert.match(dsc, /const warmUp = \(tries = 0\) => \{[\s\S]*intro\.phase !== "done" \|\| running \|\| document\.hidden[\s\S]*linkPost\("warm"\)/)
   assert.match(dsc, /setTimeout\(warmUp, 5000\)/)
 })
+
+test('ready가 오지 않으면 시간 제한 뒤 펫을 끝내고 오류를 알리며, 다음 시도에서 다시 띄운다', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dsc-pet-timeout-'))
+  try {
+    const children = []
+    const spawnImpl = () => { const c = new EventEmitter(); c.killed = false; c.kill = () => { c.killed = true }; children.push(c); return c }
+    const pet = createPetManager({ assets: 'A', exe: 'C:/dsh/DeepSeek Harness.exe', platform: 'win32', base: root, prepare: async () => 'bin', spawnImpl, readyTimeout: 80 })
+    await pet.warm()
+    assert.equal(pet.status(false).state, 'starting')
+    await sleep(150)
+    assert.equal(children[0].killed, true)
+    const status = pet.status()
+    assert.equal(status.state, 'none')
+    assert.deepEqual(status.events.map((e) => e.type), ['error'])
+    await pet.warm()
+    assert.equal(children.length, 2)   // 다음 끌기·웜업에서 다시 띄움
+    pet.dispose()
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
