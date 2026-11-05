@@ -104,7 +104,9 @@
         };
       }
 
-      // 상반신(머리 ~ 허리)만 캔버스에: 아래는 잘림
+      // 창 안 캐릭터는 상반신(머리 ~ 허리)만 캔버스에 담고 아래는 잘린다.
+      // 바깥 펫 창(PET)은 다리·신발까지 전신이 보이도록 모델 전체를 캔버스에 맞춘다.
+      const WHOLE_BODY = !!window.__dscPetMode;
       core.update();
       const cm = core.getModel();
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -119,10 +121,19 @@
       const cutY = minY + (maxY - minY) * 0.47;
       let ux0 = Infinity, ux1 = -Infinity;
       each((x, y) => { if (y < cutY) { ux0 = Math.min(ux0, x); ux1 = Math.max(ux1, x); } });
-      const bw = ux1 - ux0, bh = cutY - minY;
-      const s = Math.min((W * 0.98) / bw, (H * 0.95) / bh);
+      // 창 안(상반신 크롭) 배율. 펫 창은 전신을 담아 이보다 작게 그려지므로, 이 값과의 비율만큼 배율을 올려 머리 크기를 맞춘다
+      const sBust = Math.min((W * 0.98) / (ux1 - ux0), (H * 0.95) / (cutY - minY));
+      // 펫 창(전신) 배율과, 창 안↔펫 창의 머리 크기 비율 (붙을 때·넘길 때 같은 비율을 쓴다)
+      const sFull = Math.min((W * 0.98) / (maxX - minX), (H * 0.95) / (maxY - minY));
+      const PET_HEAD_RATIO = sBust / sFull;
+      // 펫 창(전신): 모델 전체의 가로·세로를 캔버스에 맞추고 몸 가운데를 캔버스 가운데에 둔다
+      const bw = WHOLE_BODY ? maxX - minX : ux1 - ux0;
+      const bh = WHOLE_BODY ? maxY - minY : cutY - minY;
+      const s = WHOLE_BODY ? sFull : sBust;
+      // 화면상 크기는 모델 배율 × 캔버스 배율(k). HEAD_GAIN을 곱하면 펫 창의 머리 크기가 창 안과 같아진다
+      const HEAD_GAIN = sBust / s;
       model.scale.set(s);
-      model.x = W / 2 - (ux0 + bw / 2) * s;
+      model.x = W / 2 - ((WHOLE_BODY ? minX : ux0) + bw / 2) * s;
       model.y = H * 0.05 - minY * s;
       // 꼬마 모습(체형 2)은 몸 전체가 작아져 공중에 뜨므로, 그만큼 내려서 발이 화면 바닥에 닿게 한다 (데스크톱 펫과 같음)
       core.setParameterValueById("Clothes2", 1); core.update();
@@ -451,9 +462,10 @@
         }
         if (clip !== lastClip) { canvas.style.clipPath = clip; lastClip = clip; }
         // 배치에 쓰는 값이 그대로면 건너뜀: 매 프레임 side 클래스를 뗐다 붙이며 레이아웃을 3번씩 강제하던 것 방지
-        // 허리 아래가 잘린 그림이라 화면 아래에서 띄우면 띄운 만큼 아래쪽을 흐리게 (펫 창은 늘, 붙는 동안 걷힘. 꼬마 모습은 발까지 그려져 안 흐림)
-        const lift = PET ? (petDocked ? 0 : H * k * (1 - snapP)) : innerHeight - (y + H * k);
-        const fade = Math.round(Math.max(0, Math.min(lift, H * k * 0.18)) * (1 - Math.min(1, Math.max(0, bodyW))));
+        // 허리 아래가 잘린 창 안 그림은 화면 아래에서 띄우면 띄운 만큼 아래쪽을 흐리게 (꼬마 모습은 발까지 그려져 안 흐림)
+        // 펫 창은 전신을 다 그리므로 흐리지 않는다 (예전엔 늘 흐려서 다리가 사라져 보였다)
+        const lift = PET ? 0 : Math.max(0, innerHeight - (y + H * k));
+        const fade = PET ? 0 : Math.round(Math.max(0, Math.min(lift, H * k * 0.18)) * (1 - Math.min(1, Math.max(0, bodyW))));
         const r0 = home.r;
         const placeKey = introOn ? "" : [k, x, y, innerWidth, innerHeight, fleeX, Math.round(bodyW * 40), r0 && r0.left, r0 && r0.right, r0 && r0.top, r0 && r0.bottom,
           bubble.textContent, bubble.className.replace(/\bside\b/g, "").trim(), fade, loose].join("|");
@@ -1309,8 +1321,9 @@
       };
       document.addEventListener("pointerdown", (e) => {
         if (chestFrom) { e.preventDefault(); e.stopPropagation(); swallowClick = true; return; }
+        if (e.button !== 0) return;   // 왼쪽 버튼만 받음 (오른쪽 버튼은 집어 옮기기의 보조 버튼이라 여기서 처리하지 않음)
         swallowClick = false; strokeFrom = null;
-        if (e.button !== 0 || walking()) return;   // 산책을 떠난 뒤에는 돌아올 때까지 클릭을 받지 않음 (뒤 화면으로 통과)
+        if (walking()) return;   // 산책을 떠난 뒤에는 돌아올 때까지 클릭을 받지 않음 (뒤 화면으로 통과)
         const h = hitAt(e.clientX, e.clientY);
         if (!h && !(PET && overBody(e.clientX, e.clientY))) return;
         e.preventDefault(); e.stopPropagation(); swallowClick = true;
@@ -1332,7 +1345,9 @@
         return dy > 40 && dy > dx * 0.8 ? "basin" : null;
       };
       document.addEventListener("pointermove", (e) => {
-        if (chestFrom && e.pointerId === chestFrom.id) {
+        // 왼쪽·오른쪽을 함께 누른 채 움직이면 곧바로 집어 옮긴다. 머리 쓰다듬기·가슴 끌기 판정과 6px 기준을 거치지 않는다
+        const both = (e.buttons & 3) === 3;
+        if (chestFrom && !both && e.pointerId === chestFrom.id) {
           const dy = e.clientY - chestFrom.y, dx = e.clientX - chestFrom.x, now = performance.now();
           if (!chestDragging) {
             if (dy < -12 && Math.abs(dy) > Math.abs(dx) && canPullChest(now)) {
@@ -1349,7 +1364,7 @@
             return;
           }
         }
-        if (strokeFrom) {
+        if (strokeFrom && !both) {
           const st = strokeFrom, kind = strokeKind(st, e);
           if (kind) { strokeFrom = null; if (drag.pending) { drag.pending = null; if (PET) PET.press(false); } return kind === "pot" ? potHit(st.x, st.y) : putBasin(); }
           const dy = e.clientY - st.y, dx = Math.abs(e.clientX - st.x);
@@ -1361,9 +1376,11 @@
         if (!p || e.pointerId !== p.id) return;
         // 손을 뗀 이벤트(pointerup)를 놓쳤으면 버튼 상태로 알아채고 그 자리에서 놓음 (펫 창이 커서 아래로 따라오며 다시 그려질 때 등)
         if (e.buttons === 0) return endDrag(e, false);
+        // 집어 옮기기는 왼쪽·오른쪽 버튼을 함께 눌렀을 때만. 한쪽만 누른 채 끌면 예전처럼 터치·머리 쓰다듬기·가슴 끌기로 남는다
+        if (!both) { if (drag.on) endDrag(e, false); return; }
+        strokeFrom = null; chestFrom = null;   // 좌우 함께 = 무조건 집어 옮기기 (남아 있던 제스처 예약을 버림)
         const [px, py] = pt(e), now = performance.now();
         if (!drag.on) {
-          if (Math.hypot(px - p.sx, py - p.sy) < 6) return;
           cancelWalk();   // 산책 가려고 말하던 중이면 취소
           drag.on = true; drag.samples = []; free.anim = null; free.k = shown.k; petDocked = false;
           try { document.documentElement.setPointerCapture(e.pointerId); } catch {}
@@ -1459,11 +1476,17 @@
         const over = !walking() && !!hitAt(e.clientX, e.clientY);
         document.documentElement.classList.toggle("dsc-hover", over);
       }, { passive: true });
-      if (PET) document.addEventListener("contextmenu", (e) => { e.preventDefault(); if (!walking() && overBody(e.clientX, e.clientY)) PET.menu(); }, true);
+      // 우클릭은 집어 옮기기의 보조 버튼이라, 끄는 중에는 메뉴를 열지 않는다 (펫 창에서는 놓은 뒤에만 메뉴)
+      document.addEventListener("contextmenu", (e) => {
+        if (drag.pending || drag.on) { e.preventDefault(); e.stopPropagation(); return; }
+        if (!PET) return;
+        e.preventDefault();
+        if (!walking() && overBody(e.clientX, e.clientY)) PET.menu();
+      }, true);
       // 휠로 크기 조절: 몸 위에서 올리면 커지고 내리면 작아짐 (몸 아래 가운데를 기준으로). 들고 있을 때·움직이는 중·산책·도망 중엔 무시
-      //   펫 창 = 0.45~1.25배 (최대는 펫 창 440×540에 캐릭터와 말풍선이 들어가는 크기)
+      //   펫 창 = 0.45~2.8배 (넘겨받을 때는 HEAD_GAIN으로 머리 크기를 창 안과 맞춤. 2.8배면 전신 840px)
       //   창 안 = 자유 위치일 때만 0.42배~그 창에 들어가는 최대치. 제자리에 붙어 있으면 크기는 자동이라 휠은 대화 스크롤 그대로
-      const PET_K_MIN = 0.45, PET_K_MAX = 1.25;
+      const PET_K_MIN = 0.45, PET_K_MAX = 2.8, PET_BUBBLE = 150;   // PET_BUBBLE: 머리 위 말풍선 자리(px)
       document.addEventListener("wheel", (e) => {
         if (intro.phase !== "done" || !free.on || !overBody(e.clientX, e.clientY)) return;
         e.preventDefault(); e.stopPropagation();   // 캐릭터 위에서는 대화 스크롤 대신 크기 조절
@@ -1617,8 +1640,11 @@
           if (!link.open && !link.opening && !link.follow) return;
           if (link.open || link.follow) {   // 붙을 자리(DSH 창의 제자리, 창이 좁으면 구석)와 소품·옷을 펫 창에 알려 줌
             const h = dockTarget(link.home || homePose()), d = screenOf(h.x - fleeX, h.y);
+            // 펫 창은 전신이라 같은 k면 머리가 작다. 창 안과 머리 크기가 같아지는 배율(PET_HEAD_RATIO)로 넘겨
+            // 붙는 순간 창 안 캐릭터로 바뀔 때 크기가 튀지 않게 한다 (아래 가운데 고정)
+            const k2 = h.k * PET_HEAD_RATIO;
             const tl = screenOf(0, 0), br = screenOf(innerWidth, innerHeight);   // DSH 창 영역 (펫 창이 다시 붙을지 판단)
-            const dock = { k: +h.k.toFixed(3), x: Math.round(d.x), y: Math.round(d.y), win: { l: Math.round(tl.x), t: Math.round(tl.y), r: Math.round(br.x), b: Math.round(br.y) } }, outfit = window.__dscOutfit || {};
+            const dock = { k: +k2.toFixed(3), x: Math.round(d.x + W * (h.k - k2) / 2), y: Math.round(d.y + H * (h.k - k2)), win: { l: Math.round(tl.x), t: Math.round(tl.y), r: Math.round(br.x), b: Math.round(br.y) } }, outfit = window.__dscOutfit || {};
             const sig = JSON.stringify([dock, outfit]);
             if (sig !== link.last) { link.last = sig; link.queue.push(["dock", [dock]], ["outfit", [outfit]]); }
             if (link.queue.length) { const list = link.queue; link.queue = []; linkPost("send", { list }); }
@@ -1655,11 +1681,22 @@
             walk.timers = []; walk.slideId++; walk.phase = ""; fleeX = 0; drag.pending = null; PET.press(false);
             petDocked = false; free.on = true; Object.assign(free, m.from);
             petGrab = m.follow ? (m.grab || { x: 0, y: 0 }) : null; petTracking = !!m.follow;
-            PET.send({ type: "track", on: !!m.follow, grab: petGrab, off: { x: (innerWidth - W * m.from.k) / 2, y: innerHeight - H * m.from.k } });   // 따라오기: 펫 프로세스가 커서를 따라 창을 옮기고 커서를 보내 줌
-            drag.on = !!m.follow; drag.x = m.from.x; drag.y = m.from.y; drag.samples = [[performance.now(), m.from.x + (petGrab?.x ?? 0), m.from.y + (petGrab?.y ?? 0)]];
-            free.anim = m.follow ? null : { t0: performance.now(), ms: 300, from: m.from, to: keepIn(m.to), snap: false };
+            // 펫 창은 전신이라 같은 배율이면 머리가 작아진다. 창 안 배율과의 비율(HEAD_GAIN)만큼 키워 머리 크기를 맞추고,
+            // 창(과 화면)에 들어가는 크기로 자른다. 아래 가운데를 고정한 채 배율만 바꾼다
+            const kFrom = Number(m.from.k) || 1;
+            const kFit = Math.min(PET_K_MAX, (innerHeight - PET_BUBBLE) / H, (screen.availHeight - PET_BUBBLE) / H);
+            const kTo = Math.min(kFit, Math.max(PET_K_MIN, kFrom * HEAD_GAIN));
+            if (kTo !== kFrom) {
+              const dk = kFrom - kTo;
+              free.x += W * dk / 2; free.y += H * dk; free.k = kTo;
+              if (petGrab) petGrab = { x: petGrab.x * kTo / kFrom, y: petGrab.y * kTo / kFrom };
+            }
+            const pose = { k: free.k, x: free.x, y: free.y }, to = { k: kTo, x: m.to.x + W * (kFrom - kTo) / 2, y: m.to.y + H * (kFrom - kTo) };
+            PET.send({ type: "track", on: !!m.follow, grab: petGrab, off: { x: (innerWidth - W * pose.k) / 2, y: innerHeight - H * pose.k } });   // 따라오기: 펫 프로세스가 커서를 따라 창을 옮기고 커서를 보내 줌
+            drag.on = !!m.follow; drag.x = pose.x; drag.y = pose.y; drag.samples = [[performance.now(), pose.x + (petGrab?.x ?? 0), pose.y + (petGrab?.y ?? 0)]];
+            free.anim = m.follow ? null : { t0: performance.now(), ms: 300, from: pose, to: keepIn(to), snap: false };
             until.sweat = m.follow ? Infinity : 0;
-            movePet(m.from); PET.send({ type: "placed" });
+            movePet(pose); PET.send({ type: "placed" });
           } else if (m.type === "home") {   // 우클릭 메뉴: 창으로 돌아가기
             if (petDock) free.anim = { t0: performance.now(), ms: 650, from: { ...shown }, to: null, snap: true };
             else PET.send({ type: "attach" });

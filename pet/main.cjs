@@ -9,7 +9,7 @@ const { pathToFileURL } = require('node:url')
 const arg = (name) => { const hit = process.argv.find((a) => a.startsWith(`--${name}=`)); return hit ? hit.slice(name.length + 3) : '' }
 const PIPE = arg('dsc-pipe'), ASSETS = arg('dsc-assets'), APP = __dirname
 const OWN = '/__app'   // dscpet://assets 아래에서 이 앱 폴더를 가리키는 경로
-const WIN_W = 440, WIN_H = 540   // 캐릭터(최대 375px)와 머리 위 말풍선이 들어가는 크기
+const WIN_W = 760, WIN_H = 1000   // 전신(최대 840px = 300×2.8배)과 머리 위 말풍선 자리가 들어가는 크기
 
 const MAC = process.platform === 'darwin'
 const SECRET = process.env.DSC_PET_SECRET
@@ -117,8 +117,9 @@ app.whenReady().then(() => {
       case 'menu':
         Menu.buildFromTemplate([{ label: '창으로 돌아가기', click: () => toPage({ type: 'home' }) }]).popup({ window: win })
         return
-      // 창 안 캐릭터가 나타나는 프레임에 숨기라고 알려 옴. 1초는 창 안 쪽이 응답하지 않을 때를 위한 대비
-      case 'attach': wanted = false; toHost(message); setTimeout(() => { if (!wanted) hide() }, 1000); return
+      // 창 안 캐릭터가 나타나는 프레임에 숨기라고 알려 옴 (1초는 창 안 쪽이 응답하지 않을 때를 위한 대비)
+      // 곧바로 숨긴다: 창 안 캐릭터가 그리는 한 프레임까지 기다리면 두 캐릭터가 잠깐 겹쳐 보인다
+      case 'attach': wanted = false; toHost(message); hide(); return
       case 'ready': pageReady = true; for (const m of pending.splice(0)) win.webContents.send('dsc', m); toHost(message); return
       default: toHost(message)
     }
