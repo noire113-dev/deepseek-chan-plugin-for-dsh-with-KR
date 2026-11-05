@@ -91,7 +91,13 @@ export function createAssetHandler(root = assets) {
       const type = types[extname(target)]
       const info = await stat(target)
       if (!type || !info.isFile()) { res.writeHead(404); res.end(); return }
-      res.writeHead(200, { 'content-type': type, 'content-length': info.size, 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' })
+      // 자산 파일명은 고정이라, 캐시를 막아 두면 새로고침마다 무거운 자산을 통째로 다시 받는다.
+      // 크기·수정시각으로 ETag를 만들고 If-None-Match와 같으면 304로 본문 없이 끝낸다.
+      // 파일이 바뀌면 값도 바뀌므로 갱신은 그대로 반영된다.
+      const etag = `"${info.size.toString(16)}-${Math.floor(info.mtimeMs).toString(16)}"`
+      const validators = { 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff', etag }
+      if (req.headers['if-none-match'] === etag) { res.writeHead(304, validators); res.end(); return }
+      res.writeHead(200, { 'content-type': type, 'content-length': info.size, ...validators })
       if (req.method === 'HEAD') res.end()
       else await pipeline(createReadStream(target), res)
     } catch (error) {
