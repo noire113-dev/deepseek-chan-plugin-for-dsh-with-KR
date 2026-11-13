@@ -296,7 +296,6 @@ node tools/check-lines.mjs
 - [Claude](https://claude.ai) (Anthropic, Claude Code) — 한국어화·인앱 캐릭터 코드, 패치·빌드 도구, 소개 영상 제작, PR 검증·릴리즈
 - [Codex](https://openai.com/codex) (OpenAI) — 이슈·PR 작업 계획, 코드 검수, 문서 정리
 - [DeepSeek](https://www.deepseek.com) (DeepSeek V4.1 Flash 1017) — 버그 수정, PR 통합·기능 구현, 자동 테스트
-- [Opus](https://claude.ai) (Anthropic, Claude Opus) — 기능 통합·릴리즈 작업. 0.10.0의 한국어 혼잣말(로컬 LLM, 자동 설치·별도 프로세스)과 인증 쿠키 3일만 유지 기능은 Claude Opus 5.5가 작성
 - Gemma 4 26B A4B heretic — 대사 ex 작성
 - Live2D 모델 원작: Kamiya_Ryoko (VGen @KAMIYA) — `NOTICE.md` 참고
 
