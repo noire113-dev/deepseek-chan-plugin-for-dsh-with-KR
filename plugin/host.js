@@ -11,6 +11,10 @@ import { createPetHandler, createPetManager, PET_PATH } from './pet-host.js'
 import { applyShortcutIcon } from './app-icon.js'
 import { AVATAR_CACHE_PATH, createAoCacheHandler } from './avatar-cache.js'
 import { OUTFIT_ITEMS, BODY_TYPES } from '../shared/settings.js'
+import { createMutterHandler, MUTTER_KO_PATH } from './mutter-ko.js'
+import { createMutterWorker } from './mutter-worker.js'
+import { createMutterRuntime } from './mutter-runtime.js'
+import { shortenAuthCookies } from './auth-cookie.js'
 
 export const name = 'deepseek-harness-kr'
 export const inject = ['webServer', 'connection']
@@ -27,7 +31,7 @@ export const inject = ['webServer', 'connection']
  */
 /**
  * 설정 중 이 파일이 읽는 값 (volatile 참조일 수 있어 readLive로 읽음)
- * @typedef {{ tts?: unknown, appIcon?: unknown, avatarModelDir?: unknown }} HostConfig
+ * @typedef {{ tts?: unknown, appIcon?: unknown, avatarModelDir?: unknown, mutterKo?: unknown, mutterKoModel?: unknown, authCookieShort?: unknown }} HostConfig
  */
 
 // 말풍선 음성(TTS). 설정 화면이 쓰는 값은 모두 volatile이어야 한다(Settings는 volatile 필드만 쓴다).
@@ -84,7 +88,13 @@ export const Config = z.object({
   bodyType: z.union(BODY_TYPES.map(({ key }) => z.const(key))).default('default').volatile(),
   // '대사 ex': 켜면 assets/dsc-lines-ex.json의 대사를 덮어쓴다 (기본 꺼짐)
   extraLines: z.boolean().default(false).volatile(),
+  // 인증 쿠키 3일만 유지: DSH가 켤 때마다 만드는 인증 쿠키가 30일씩 쌓여 시작 오류("Web authentication failed")가 나는 것을 막음 (plugin/auth-cookie.js)
+  authCookieShort: z.boolean().default(true).volatile(),
   tts: TtsConfig,
+  // 한국어 혼잣말: 영어 추론 요약을 로컬 LLM(CPU)으로 캐릭터 말투 한국어로 바꿔 중얼거림 (기본 꺼짐. 켜면 엔진·기본 모델 약 1.6GB를 자동으로 받음)
+  mutterKo: z.boolean().default(false).volatile(),
+  // 한국어 혼잣말에 쓸 GGUF 모델 파일 (절대 경로). 비우면 기본 모델(Kanana 1.5 2.1B Q4_K_M)을 받아 쓴다
+  mutterKoModel: z.string().default('').volatile(),
   // 시작할 때 가운데에서 크게 인사하는 등장 연출 (끄면 처음부터 제자리에 뜬다)
   intro: z.boolean().default(true).volatile(),
   // 모바일(터치 전용) 화면에서도 캐릭터를 보여 줄지 (기본 표시)
@@ -216,7 +226,66 @@ export function apply(ctx, config, { applyIcon = applyShortcutIcon, avatarCacheD
   // 3D 모델 AO 굽기 캐시: 키는 모델 폴더 안 실제 파일·크기·수정 시각·굽기 설정으로 호스트가 정함 (avatar-cache.js)
   ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: AVATAR_CACHE_PATH,
     handler: createAoCacheHandler({ modelDir: () => readLive(config?.avatarModelDir), rejection, ...(avatarCacheDir ? { cacheDir: avatarCacheDir } : {}) }) }), 'deepseek-harness-kr: avatar cache')
-  ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: STATUS_PATH, handler: createStatusHandler(() => ({ appIcon: appIconProblem }), rejection) }), 'deepseek-harness-kr: status')
+  // 인증 쿠키 3일만 유지: 설정(volatile)을 몇 초마다 확인해 켜면 감싸고 끄면 되돌림. DSH 구조가 달라 감쌀 수 없으면 아무것도 하지 않음
+  ctx.effect(() => {
+    /** @type {(() => void) | null} */
+    let restore = null
+    const sync = () => {
+      const want = readLive(config?.authCookieShort) !== false
+      if (want && !restore) restore = shortenAuthCookies(ctx.connection)
+      else if (!want && restore) { restore(); restore = null }
+    }
+    sync()
+    const timer = setInterval(sync, 4000)
+    timer.unref?.()
+    return () => { clearInterval(timer); restore?.() }
+  }, 'deepseek-harness-kr: auth cookie lifetime')
+  // 한국어 혼잣말: 켜면 엔진·기본 모델을 사용자 폴더에 자동으로 받고(mutter-runtime.js) 모델을 메모리에 불러 둔다(끌 때까지 유지).
+  // DSH 시작을 늦추지 않게, 시작 화면이 뜬 뒤 화면 쪽이 보내는 warm 요청에서 준비한다.
+  // 경로는 설정값(volatile)을 요청마다 읽고, 꺼져 있으면 404, 준비 중이면 503(화면 쪽은 영어로 중얼거림)
+  const log = (/** @type {string} */ message) => console.info('[deepseek-harness-kr]', message)
+  const runtime = createMutterRuntime({ log })
+  // 엔진은 별도 프로세스에서(낮은 CPU 우선순위): 이 호스트는 엔진을 불러오지 않아 DSH가 멈추거나 느려지지 않는다
+  const mutter = createMutterWorker({ engineEntry: () => runtime.engineEntry(), log })
+  /** 준비가 끝난 모델 파일 (꺼져 있거나 준비 중이면 빈 문자열) */
+  let activeModel = ''
+  ctx.effect(() => {
+    const settings = () => {
+      const model = readLive(config?.mutterKoModel)
+      return { enabled: readLive(config?.mutterKo) === true, custom: typeof model === 'string' ? model.trim().replace(/^"|"$/g, '') : '' }
+    }
+    const read = () => ({ enabled: settings().enabled, modelPath: activeModel })
+    let last = ''
+    /** 준비 시작: 엔진·모델 확인(없으면 받기) 뒤 모델을 메모리에 불러 둠. 같은 설정으로 이미 준비됐으면 불러오기만 */
+    const warmUp = () => {
+      const key = last
+      if (!key) return
+      runtime.prepare(settings().custom).then((file) => {
+        if (last !== key) return
+        activeModel = file
+        mutter.warm(file)
+      }, (error) => log('한국어 혼잣말 준비 실패: ' + (error?.message ?? error)))
+    }
+    const unregister = ctx.webServer.register({ kind: 'exact', path: MUTTER_KO_PATH, handler: createMutterHandler(mutter, read, rejection, warmUp) })
+    // DSH가 시작될 때는 아무것도 하지 않고, 화면이 뜬 뒤 화면 쪽이 보내는 warm 요청에서 준비한다(시작을 늦추지 않게).
+    // 시작한 뒤에 켜거나 모델 파일을 바꾸면 바로 준비, 끄면 메모리에서 내림 (설정은 volatile이라 몇 초마다 확인, 바뀐 경우에만. 실패하면 껐다 켜서 다시 시도)
+    let starting = true
+    const sync = () => {
+      const { enabled, custom } = settings()
+      const key = enabled ? 'on:' + custom : ''
+      if (key === last) return
+      last = key
+      activeModel = ''
+      if (!key) { void mutter.dispose(); return }
+      if (!starting) warmUp()
+    }
+    sync()
+    starting = false
+    const timer = setInterval(sync, 4000)
+    timer.unref?.()
+    return () => { clearInterval(timer); unregister?.(); void mutter.dispose() }
+  }, 'deepseek-harness-kr: korean mutters')
+  ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: STATUS_PATH, handler: createStatusHandler(() => ({ appIcon: appIconProblem, mutterKo: { ...runtime.status(), model: mutter.status() } }), rejection) }), 'deepseek-harness-kr: status')
   ctx.effect(() => {
     const pet = createPetManager({ assets, avatarDir: () => readLive(config?.avatarModelDir) })
     const unregister = ctx.webServer.register({ kind: 'prefix', path: PET_PATH, handler: createPetHandler(pet, rejection) })

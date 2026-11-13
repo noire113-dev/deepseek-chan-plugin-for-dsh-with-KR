@@ -20,6 +20,11 @@
   "files": [
     "plugin/host.js",
     "plugin/app-icon.js",
+    "plugin/auth-cookie.js",
+    "plugin/mutter-ko.js",
+    "plugin/mutter-runtime.js",
+    "plugin/mutter-runtime.json",
+    "plugin/mutter-worker.js",
     "plugins/dsh-tts/src/cache.js",
     "plugins/dsh-tts/src/config.js",
     "plugins/dsh-tts/src/host.js",

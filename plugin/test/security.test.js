@@ -7,6 +7,7 @@ import { registerSpeechRoutes } from '../../plugins/dsh-tts/src/index.js'
 import { normalize } from '../../plugins/dsh-tts/src/config.js'
 import { apply, ASSET_PATH, AVATAR_PATH, Config, readLive, STATUS_PATH } from '../host.js'
 import { AVATAR_CACHE_PATH } from '../avatar-cache.js'
+import { MUTTER_KO_PATH } from '../mutter-ko.js'
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -48,7 +49,7 @@ test('invalid TTS initialization and partial registration preserve assets and pe
       routes.set(route.path, route.handler); return () => routes.delete(route.path)
     } } }
     assert.doesNotThrow(() => apply(ctx, { tts: { enabled: true, openai: { timeoutMs: partial ? 30000 : 601000 } } }, { applyIcon: async () => ({}) }))
-    assert.deepEqual([...routes.keys()], [ASSET_PATH, AVATAR_PATH, AVATAR_CACHE_PATH, STATUS_PATH, PET_PATH])
+    assert.deepEqual([...routes.keys()], [ASSET_PATH, AVATAR_PATH, AVATAR_CACHE_PATH, MUTTER_KO_PATH, STATUS_PATH, PET_PATH])
     disposers.reverse().forEach((fn) => fn?.()); assert.equal(routes.size, 0)
   }
 })

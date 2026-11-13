@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { JSDOM } from 'jsdom'
-import { readStatus, scanAddedNode, readThought, thoughtLine, vtuberize, TOOLS } from '../../character/harness-signals.ts'
+import { readStatus, scanAddedNode, readThought, thoughtLine, thoughtSentence, vtuberize, TOOLS } from '../../character/harness-signals.ts'
 
 // DSH 화면(DOM)을 읽는 부분만 모은 모듈을 실제 DOM으로 확인한다
 const page = (html) => new JSDOM(`<!doctype html><body>${html}</body>`).window.document
@@ -37,4 +37,10 @@ test('중얼거림: 한국어 문장은 첫 문장을 줄이고, 영어는 버�
   assert.equal(thoughtLine('const x = require("a/b/c"); foo(x)', never), null)
   assert.equal(thoughtLine('The user asks for help.', () => 0), 'Hmm… You ask for help.')
   assert.equal(vtuberize("This user's file"), 'Your file')
+})
+
+test('첫 문장: 한국어 문장은 korean, 영어는 다듬지 않은 첫 문장, 코드 같은 줄은 빈 문자열', () => {
+  assert.deepEqual(thoughtSentence('사용자가 요청한 파일을 먼저 읽어 보겠습니다. 그다음 고칩니다.'), { first: '사용자가 요청한 파일을 먼저 읽어 보겠습니다.', korean: true })
+  assert.deepEqual(thoughtSentence('1. The user wants a quick summary of the repo. Then more.'), { first: 'The user wants a quick summary of the repo.', korean: false })
+  assert.deepEqual(thoughtSentence('const x = require("a/b/c"); foo(x)'), { first: '', korean: false })
 })

@@ -57,6 +57,8 @@ export interface CharacterPrefs {
   avatar?: { enabled?: boolean; outline?: "smooth" | "model"; browScale?: number; browSmooth?: number; ao?: boolean; aoStrength?: number }
   /** '대사 ex' 설정: 켜면 assets/dsc-lines-ex.json의 대사를 덮어쓴다 */
   extra?: { enabled?: boolean }
+  /** 한국어 혼잣말: 켜면 영어 추론 요약을 호스트의 로컬 LLM으로 한국어로 바꿔 중얼거림 (실패하면 영어 그대로) */
+  mutterKo?: { enabled?: boolean }
 }
 
 /** 펫 창 preload가 넣어 주는 window.dscPet (메인 프로세스와의 통로) */

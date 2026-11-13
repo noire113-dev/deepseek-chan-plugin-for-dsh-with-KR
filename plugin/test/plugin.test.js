@@ -16,6 +16,7 @@ import vm from 'node:vm'
 import { JSDOM } from 'jsdom'
 import { apply as hostApply, createAssetHandler, ASSET_PATH, AVATAR_PATH, Config, readLive, STATUS_PATH } from '../host.js'
 import { AVATAR_CACHE_PATH } from '../avatar-cache.js'
+import { MUTTER_KO_PATH } from '../mutter-ko.js'
 import { PET_PATH } from '../pet-host.js'
 
 const packageName = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8')).name
@@ -754,7 +755,7 @@ test('Host asset route serves only its files and unregisters with the plugin', a
     hostApply({ effect(fn) { disposers.push(fn()) }, webServer: { register(route) { registrations.set(route.path, route); return () => registrations.delete(route.path) } } }, undefined, { applyIcon })
     assert.deepEqual(icons, [true], 'app icon defaults to on, through the injected function only')
     assert.equal(registrations.get(ASSET_PATH).kind, 'prefix')
-    assert.deepEqual([...registrations.keys()].sort(), [ASSET_PATH, AVATAR_PATH, AVATAR_CACHE_PATH, STATUS_PATH, PET_PATH, '/dsh-tts/speak', '/dsh-tts/state'].sort())
+    assert.deepEqual([...registrations.keys()].sort(), [ASSET_PATH, AVATAR_PATH, AVATAR_CACHE_PATH, MUTTER_KO_PATH, STATUS_PATH, PET_PATH, '/dsh-tts/speak', '/dsh-tts/state'].sort())
     for (const dispose of disposers) dispose()
     assert.equal(registrations.size, 0)
   } finally {
@@ -839,8 +840,8 @@ test('plugin settings page exposes feature and power saving switches', () => {
     const Page = h.pages.get(packageName + '#deepseek-harness-kr')
     assert(Page)
     const html = renderToStaticMarkup(React.createElement(Page, { view: 'page' }))
-    assert.equal((html.match(/role="switch"/g) || []).length, 9)
-    assert.equal((html.match(/<input type="checkbox" role="switch" checked=""/g) || []).length, 5)
+    assert.equal((html.match(/role="switch"/g) || []).length, 11)
+    assert.equal((html.match(/<input type="checkbox" role="switch" checked=""/g) || []).length, 6)
     assert.match(html, /Character and speech bubbles/)
     assert.match(html, /Show character on mobile/)
     assert.match(html, /Intro on startup/)
@@ -1025,7 +1026,7 @@ test('settings page shows the update section and still works without the plugin 
     const html = renderToStaticMarkup(React.createElement(Page, { view: 'page' }))
     assert.match(html, /aria-label="Updates"/)
     assert.match(html, /Plugin manager is unavailable/)
-    assert.equal((html.match(/role="switch"/g) || []).length, 9)
+    assert.equal((html.match(/role="switch"/g) || []).length, 11)
     assert.match(html, /Extra dialogue/)
     ctx.dispose()
   } finally { h.dom.window.close() }
@@ -1134,7 +1135,7 @@ test('settings page shows the voice section without needing a YAML edit', () => 
     assert.match(html, /AI-generated voice/)
     assert.match(html, /credential store is unavailable/)
     assert.match(html, /type="password"/)
-    assert.equal((html.match(/role="switch"/g) || []).length, 9, 'feature, mobile, intro, icon, extra lines, sleep and canvas switches are present')
+    assert.equal((html.match(/role="switch"/g) || []).length, 11, 'feature, mobile, intro, icon, extra lines, korean mutters, auth cookie, sleep and canvas switches are present')
     assert.match(html, /Extra dialogue/)
     ctx.dispose()
   } finally { h.dom.window.close() }

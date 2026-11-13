@@ -11,7 +11,7 @@ import { OUTFIT_ITEMS, BODY_TYPES } from "../shared/settings.js";
 import { HOME_GAP, SHOW_K, MIN_SHOW_K, homeLayout, bubbleLayout, bubbleTail, tailRight, tailLeft, introBubbleSize } from "./layout.ts";
 import { chordDown, chordWithinGrace, chordUp, type Chord } from "./chord.ts";
 import { clamp, noise, S, spring, addGesture, blinkClose } from "./motion.ts";
-import { readStatus, scanAddedNode, readThought, thoughtLine } from "./harness-signals.ts";
+import { readStatus, scanAddedNode, readThought, thoughtLine, thoughtSentence } from "./harness-signals.ts";
 import { createPetLink, type PetMessage } from "./pet-link.ts";
 import { log } from "./log.ts";
 import { parseSyllables } from "./speech.ts";
@@ -2807,10 +2807,35 @@ export function createCharacter({ base, life, pet = null, prefs: initialPrefs = 
         if (waitingKind || now - lastToolSay < 1500) return;
         lastToolSay = now; say(text, 0, false, "status");
       };
-      let lastThought = "", lastMutterAt = 0;
+      let lastThought = "", lastMutterAt = 0, mutterAsk = 0, mutterKoWarned = false;
+      /** 혼잣말 말풍선 띄우기 (길이에 맞춰 3.8~5.2초) */
+      const mutterSay = (line: string) => {
+        say(line, Math.min(5200, Math.max(3800, 1500 + line.length * 55)), true);
+        if (Math.random() < 0.35) play("tilt", 1600);
+      };
+      /**
+       * 영어 혼잣말을 호스트의 로컬 LLM으로 한국어로 바꿔 중얼거림. 4초 안에 답이 없거나 실패하면 원래 영어 줄로,
+       * 그사이 새 혼잣말 요청이 나갔거나 작업이 멈춰 다른 반응 중이면 버림
+       */
+      const mutterKorean = (english: string, fallback: string) => {
+        const ask = ++mutterAsk, controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 4000);
+        const still = () => ask === mutterAsk && !life.stopped && running && !waitingKind;
+        fetch("/deepseek-harness-kr/mutter-ko", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: english }), signal: controller.signal, cache: "no-store" })
+          .then(async (response) => {
+            const body = await response.json().catch(() => null) as { text?: string; error?: string; message?: string } | null;
+            if (!response.ok || !body?.text) throw new Error(body?.message || body?.error || "HTTP " + response.status);
+            if (still() && performance.now() - lastSayAt > 1500) mutterSay(body.text);
+          })
+          .catch((error) => {
+            if (!mutterKoWarned && !controller.signal.aborted) { mutterKoWarned = true; console.warn("DeepSeek짱 한국어 혼잣말 실패, 영어로 중얼거립니다:", error?.message ?? error); }
+            if (still() && performance.now() - lastSayAt > 1500) mutterSay(fallback);
+          })
+          .finally(() => clearTimeout(timer));
+      };
       /**
        * 추론 혼잣말: 작업 중 화면의 추론 요약 줄(방금 끝난 문단의 첫 줄)이 바뀌면, 한국어·영어 문장을 가끔 중얼거림
-       * 혼잣말 사이 6초, 다른 말 뒤 2.5초 간격 유지
+       * 혼잣말 사이 6초, 다른 말 뒤 2.5초 간격 유지. 한국어 혼잣말이 켜져 있으면 영어 줄은 한국어로 바꿔서
        */
       const mutterCheck = () => {
         const raw = readThought(document);
@@ -2821,10 +2846,16 @@ export function createCharacter({ base, life, pet = null, prefs: initialPrefs = 
         const line = thoughtLine(raw);
         if (!line) return;
         lastMutterAt = now;
-        say(line, Math.min(5200, Math.max(3800, 1500 + line.length * 55)), true);
-        if (Math.random() < 0.35) play("tilt", 1600);
+        const { first, korean } = thoughtSentence(raw);
+        if (prefs.mutterKo?.enabled && !korean && first) mutterKorean(first, line);
+        else mutterSay(line);
       };
 
+      // 한국어 혼잣말: 화면이 뜨고 3초 뒤 호스트가 준비(엔진 확인·모델 불러오기)를 시작하게. DSH 시작 중에는 호스트가 아무것도 하지 않음 (실패는 무시)
+      // (설정값은 캐릭터가 만들어진 뒤에 들어오므로 켜짐 여부는 3초 뒤에 확인)
+      if (!PET) setTimeout(() => {
+        if (!life.stopped && prefs.mutterKo?.enabled) fetch("/deepseek-harness-kr/mutter-ko", { method: "POST", headers: { "content-type": "application/json" }, body: '{"warm":true}', cache: "no-store" }).catch(() => {});
+      }, 3000);
       // 시작 인사 (가운데 연출 중): 0.7초 뒤 5.8초 동안
       if (!PET) setTimeout(() => { if (!link.open) { say(TEXT.hello, 5800, false, "reaction"); play("sway", 2300); } }, 700);
       if (life.stopped) return;

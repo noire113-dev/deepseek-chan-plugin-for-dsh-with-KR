@@ -292,16 +292,21 @@
     const you = article[0] === article[0].toUpperCase() ? "You" : "you";
     return you + " " + (VERB[word.toLowerCase()] || word);
   }).replace(/\b(the|this) user\b/gi, (match) => match[0] === match[0].toUpperCase() ? "You" : "you");
-  function thoughtLine(summary, random = Math.random) {
+  function thoughtSentence(summary) {
     const t = summary.replace(/[*_`#>]+/g, "").replace(/\s+/g, " ").trim().replace(/^(?:[-•]|\d+[.)])\s+/, "").replace(/^\([^)]{1,30}\):?\s*/, "");
     const hangul = (t.match(/[가-힣]/g) || []).length;
     const latin = (t.match(/[A-Za-z]/g) || []).length;
     const first = (t.match(/^.{4,}?[.!?。…](\s|$)/) || [t])[0].trim();
-    if (hangul >= 4 && latin <= hangul * 0.35)
-      return first.length > 42 ? first.slice(0, 40).trim() + "…" : first;
+    if (hangul >= 4 && latin <= hangul * 0.35) return { first, korean: true };
     const words = first.split(" ").filter((word) => /[A-Za-z]{2,}/.test(word)).length;
     const symbols = (first.match(/[{}()\[\];=<>\/\\|$@]/g) || []).length;
-    if (latin < 12 || words < 3 || hangul > latin * 0.1 || symbols > first.length * 0.04 || first.includes("://")) return null;
+    if (latin < 12 || words < 3 || hangul > latin * 0.1 || symbols > first.length * 0.04 || first.includes("://")) return { first: "", korean: false };
+    return { first, korean: false };
+  }
+  function thoughtLine(summary, random = Math.random) {
+    const { first, korean } = thoughtSentence(summary);
+    if (korean) return first.length > 42 ? first.slice(0, 40).trim() + "…" : first;
+    if (!first) return null;
     let line = vtuberize(first);
     const hmm = random() < 0.3 ? "Hmm… " : "";
     const max = 64 - hmm.length;
@@ -4432,7 +4437,27 @@
           lastToolSay = now;
           say(text, 0, false, "status");
         };
-        let lastThought = "", lastMutterAt = 0;
+        let lastThought = "", lastMutterAt = 0, mutterAsk = 0, mutterKoWarned = false;
+        const mutterSay = (line) => {
+          say(line, Math.min(5200, Math.max(3800, 1500 + line.length * 55)), true);
+          if (Math.random() < 0.35) play("tilt", 1600);
+        };
+        const mutterKorean = (english, fallback) => {
+          const ask = ++mutterAsk, controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 4e3);
+          const still = () => ask === mutterAsk && !life.stopped && running && !waitingKind;
+          fetch("/deepseek-harness-kr/mutter-ko", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: english }), signal: controller.signal, cache: "no-store" }).then(async (response) => {
+            const body = await response.json().catch(() => null);
+            if (!response.ok || !body?.text) throw new Error(body?.message || body?.error || "HTTP " + response.status);
+            if (still() && performance.now() - lastSayAt > 1500) mutterSay(body.text);
+          }).catch((error) => {
+            if (!mutterKoWarned && !controller.signal.aborted) {
+              mutterKoWarned = true;
+              console.warn("DeepSeek짱 한국어 혼잣말 실패, 영어로 중얼거립니다:", error?.message ?? error);
+            }
+            if (still() && performance.now() - lastSayAt > 1500) mutterSay(fallback);
+          }).finally(() => clearTimeout(timer));
+        };
         const mutterCheck = () => {
           const raw = readThought(document);
           if (!raw || raw === lastThought) return;
@@ -4442,9 +4467,14 @@
           const line = thoughtLine(raw);
           if (!line) return;
           lastMutterAt = now;
-          say(line, Math.min(5200, Math.max(3800, 1500 + line.length * 55)), true);
-          if (Math.random() < 0.35) play("tilt", 1600);
+          const { first, korean } = thoughtSentence(raw);
+          if (prefs.mutterKo?.enabled && !korean && first) mutterKorean(first, line);
+          else mutterSay(line);
         };
+        if (!PET) setTimeout(() => {
+          if (!life.stopped && prefs.mutterKo?.enabled) fetch("/deepseek-harness-kr/mutter-ko", { method: "POST", headers: { "content-type": "application/json" }, body: '{"warm":true}', cache: "no-store" }).catch(() => {
+          });
+        }, 3e3);
         if (!PET) setTimeout(() => {
           if (!link.open) {
             say(TEXT.hello, 5800, false, "reaction");

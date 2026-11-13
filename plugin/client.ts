@@ -23,6 +23,9 @@ interface PluginSettings {
   translation?: boolean
   bodyType?: string
   extraLines?: boolean
+  mutterKo?: boolean
+  mutterKoModel?: string
+  authCookieShort?: boolean
   idleSleep?: boolean
   idleSleepMinutes?: number | string
   characterToggleKey?: string
@@ -307,6 +310,8 @@ function characterPrefs(value: PluginSettings) {
     drag: { key: value.dragKey ?? 'Alt' },
     // '대사 ex': 켜면 assets/dsc-lines-ex.json의 대사를 덮어쓴다 (기본 꺼짐)
     extra: { enabled: value.extraLines === true },
+    // 한국어 혼잣말: 혼잣말할 때마다 읽는다 (모델·엔진은 호스트가 자동으로 준비)
+    mutterKo: { enabled: value.mutterKo === true },
   }
 }
 
@@ -979,6 +984,30 @@ function settingsPage(ctx: DshContext, form: ConfigForm<PluginSettings>, updater
         React.createElement('input', { type: 'checkbox', role: 'switch', checked: state.value?.extraLines === true, disabled: off,
           /** 켜짐 여부 저장 */
           onChange: (event) => change('extraLines', event.target.checked) })),
+      React.createElement('section', { 'aria-label': ko ? '한국어 혼잣말' : 'Korean mutters', style: { display: 'grid', gap: 10, borderTop: '1px solid rgba(127,127,127,.25)', paddingTop: 14 } },
+        React.createElement('label', { style: row },
+          React.createElement('strong', null, ko ? '한국어 혼잣말 (로컬 LLM)' : 'Korean mutters (local LLM)'),
+          React.createElement('input', { type: 'checkbox', role: 'switch', checked: state.value?.mutterKo === true, disabled: off,
+            /** 켜짐 여부 저장 */
+            onChange: (event) => change('mutterKo', event.target.checked) })),
+        React.createElement('p', { style: { margin: 0, opacity: 0.7 } }, ko
+          ? '작업 중 영어 추론 혼잣말을 이 PC의 CPU에서 도는 작은 모델(Kanana 1.5 2.1B)로 한국어로 바꿉니다. 처음 켜면 엔진과 모델(약 1.6GB)을 자동으로 받고, 켜 두는 동안 메모리를 약 2GB 씁니다. 준비 중이거나 4초 안에 답이 없으면 영어로 중얼거립니다.'
+          : 'Turns English reasoning mutters into Korean with a small model (Kanana 1.5 2.1B) on this PC\'s CPU. The first time it is turned on, the engine and model (about 1.6 GB) download automatically; it uses about 2 GB of memory while on. Falls back to English while preparing or if slower than 4 seconds.'),
+        React.createElement(MutterStatus, { ko, on: state.value?.mutterKo === true }),
+        React.createElement('label', { style: row },
+          React.createElement('span', null, ko ? '모델 파일 (선택)' : 'Model file (optional)'),
+          React.createElement('input', { type: 'text', style: { flex: 1, maxWidth: 360 }, defaultValue: state.value?.mutterKoModel ?? '', placeholder: ko ? '비우면 기본 모델을 받아 씁니다' : 'Empty downloads the default model', disabled: off,
+            /** 입력을 마치면 모델 파일 경로 저장 */
+            onBlur: (event: React.FocusEvent<HTMLInputElement>) => { if (event.target.value !== (state.value?.mutterKoModel ?? '')) change('mutterKoModel', event.target.value.trim()) } }))),
+      React.createElement('section', { 'aria-label': ko ? 'DSH 시작 오류 예방' : 'DSH startup fix', style: { display: 'grid', gap: 10, borderTop: '1px solid rgba(127,127,127,.25)', paddingTop: 14 } },
+        React.createElement('label', { style: row },
+          React.createElement('strong', null, ko ? '인증 쿠키 3일만 유지' : 'Keep auth cookies for three days'),
+          React.createElement('input', { type: 'checkbox', role: 'switch', checked: state.value?.authCookieShort !== false, disabled: off,
+            /** 켜짐 여부 저장 */
+            onChange: (event) => change('authCookieShort', event.target.checked) })),
+        React.createElement('p', { style: { margin: 0, opacity: 0.7 } }, ko
+          ? 'DSH는 켤 때마다 인증 쿠키를 하나씩 새로 만들고 30일 동안 남겨 둡니다. 많이 쌓이면 "Web authentication failed" 오류로 시작하지 못합니다. 켜 두면 새로 만드는 쿠키를 3일만 유지해 쌓이지 않게 합니다. 이미 쓰고 있는 쿠키에는 영향이 없습니다.'
+          : 'DSH creates a new auth cookie on every launch and keeps it for 30 days. Too many make it fail to start with "Web authentication failed". When on, new cookies last three days so they do not pile up. Cookies already in use are not affected.')),
       React.createElement('p', { style: { opacity: 0.7 } }, ko ? '설정은 바꾸는 즉시 저장되고 적용됩니다. 화면 언어는 설정 → 일반 설정 → 언어에서 한국어로 바꿀 수 있습니다.' : 'Changes apply and save immediately. Select Korean under Settings → General → Language.'),
       React.createElement('section', { 'aria-label': ko ? '소품·옷' : 'Accessories and outfit', style: { display: 'grid', gap: 10, borderTop: '1px solid rgba(127,127,127,.25)', paddingTop: 14 } },
         React.createElement('strong', null, ko ? '소품·옷' : 'Accessories and outfit'),
@@ -1113,6 +1142,43 @@ function settingsPage(ctx: DshContext, form: ConfigForm<PluginSettings>, updater
 
 /** 시작 후 호스트 진단 상태를 읽을 때까지 기다리는 시간 (앱 아이콘 적용에 걸리는 시간보다 넉넉히) */
 const HOST_STATUS_DELAY_MS = 15000
+
+/** 호스트가 알려 주는 한국어 혼잣말 준비 상태 (plugin/mutter-runtime.js status) */
+interface MutterState { phase?: string; done?: number; total?: number; problem?: string | null; model?: { loaded?: string | null; problem?: string | null } }
+/**
+ * 한국어 혼잣말 준비 상태 한 줄 (켜져 있는 동안 2초마다 호스트 상태를 읽음)
+ * @returns 표시할 문구, 꺼져 있거나 아직 모르면 빈 문자열
+ */
+function mutterStatusText(state: MutterState | null | undefined, ko: boolean) {
+  if (!state) return ''
+  const percent = state.total ? Math.min(100, Math.floor((state.done ?? 0) / state.total * 100)) : 0
+  if (state.phase === 'engine') return ko ? `엔진 받는 중… ${percent}%` : `Downloading engine… ${percent}%`
+  if (state.phase === 'model') return ko ? `모델 받는 중… ${percent}% (약 1.5GB)` : `Downloading model… ${percent}% (about 1.5 GB)`
+  if (state.phase === 'error') return (ko ? '준비 실패: ' : 'Setup failed: ') + (state.problem ?? '') + (ko ? ' (껐다 켜면 다시 시도합니다)' : ' (turn off and on to retry)')
+  if (state.model?.problem) return (ko ? '모델을 불러오지 못했습니다: ' : 'Could not load the model: ') + state.model.problem
+  if (state.phase === 'ready') return state.model?.loaded
+    ? (ko ? '준비 완료 · 모델이 메모리에 있음' : 'Ready · model in memory')
+    : (ko ? '모델 불러오는 중…' : 'Loading model…')
+  return ''
+}
+function MutterStatus({ ko, on }: { ko: boolean; on: boolean }) {
+  const [text, setText] = React.useState('')
+  React.useEffect(() => {
+    if (!on) { setText(''); return }
+    let stopped = false
+    const read = async () => {
+      try {
+        const response = await window.fetch('/deepseek-harness-kr/status', { cache: 'no-store' })
+        const body = response.ok ? await response.json() as { mutterKo?: MutterState } : null
+        if (!stopped) setText(mutterStatusText(body?.mutterKo, ko))
+      } catch { /* 상태를 못 읽으면 표시만 생략 */ }
+    }
+    void read()
+    const timer = window.setInterval(read, 2000)
+    return () => { stopped = true; window.clearInterval(timer) }
+  }, [on, ko])
+  return text ? React.createElement('p', { style: { margin: 0, fontWeight: 600 }, role: 'status' }, text) : null
+}
 
 /**
  * 호스트 진단 상태 한 번 조회 후 실패만 콘솔 경고. 조회 자체가 안 되면 디버그 로그만

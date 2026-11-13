@@ -85,23 +85,33 @@ export const vtuberize = (text: string) => text
   .replace(/\b(the|this) user\b/gi, (match: string) => (match[0] === match[0].toUpperCase() ? "You" : "you"));
 
 /**
- * 추론 요약 한 줄을 중얼거릴 말로 변환. 한국어·영어 문장만
- * @param random 0~1 난수 함수 (가끔 "Hmm… " 머리말)
- * @returns 중얼거릴 말 (코드·경로처럼 기호가 많은 줄은 null)
+ * 추론 요약 한 줄의 첫 문장 고르기 (목록 기호·머리말 제거)
+ * @returns first: 첫 문장 (중얼거릴 만한 한국어·영어 문장이 아니면 빈 문자열), korean: 한국어가 대부분인 문장 여부
  */
-export function thoughtLine(summary: string, random = Math.random): string | null {
+export function thoughtSentence(summary: string): { first: string; korean: boolean } {
   const t = summary.replace(/[*_`#>]+/g, "").replace(/\s+/g, " ").trim()
     .replace(/^(?:[-•]|\d+[.)])\s+/, "")            // 목록 기호 (- • 1. 1))
     .replace(/^\([^)]{1,30}\):?\s*/, "");          // (Self-Correction): 같은 머리말
   const hangul = (t.match(/[가-힣]/g) || []).length;
   const latin = (t.match(/[A-Za-z]/g) || []).length;
   const first = (t.match(/^.{4,}?[.!?。…](\s|$)/) || [t])[0].trim();   // 첫 문장
-  if (hangul >= 4 && latin <= hangul * 0.35)                          // 한국어가 대부분인 문장
-    return first.length > 42 ? first.slice(0, 40).trim() + "…" : first;
+  if (hangul >= 4 && latin <= hangul * 0.35) return { first, korean: true };   // 한국어가 대부분인 문장
   // 영어 문장: 낱말 3개 이상, 한글은 거의 없고, 코드·경로처럼 기호가 많은 줄은 뺌
   const words = first.split(" ").filter((word) => /[A-Za-z]{2,}/.test(word)).length;
   const symbols = (first.match(/[{}()\[\];=<>\/\\|$@]/g) || []).length;
-  if (latin < 12 || words < 3 || hangul > latin * 0.1 || symbols > first.length * 0.04 || first.includes("://")) return null;
+  if (latin < 12 || words < 3 || hangul > latin * 0.1 || symbols > first.length * 0.04 || first.includes("://")) return { first: "", korean: false };
+  return { first, korean: false };
+}
+
+/**
+ * 추론 요약 한 줄을 중얼거릴 말로 변환. 한국어·영어 문장만
+ * @param random 0~1 난수 함수 (가끔 "Hmm… " 머리말)
+ * @returns 중얼거릴 말 (코드·경로처럼 기호가 많은 줄은 null)
+ */
+export function thoughtLine(summary: string, random = Math.random): string | null {
+  const { first, korean } = thoughtSentence(summary);
+  if (korean) return first.length > 42 ? first.slice(0, 40).trim() + "…" : first;
+  if (!first) return null;
   let line = vtuberize(first);
   const hmm = random() < 0.3 ? "Hmm… " : "";                    // 가끔 생각하는 소리
   const max = 64 - hmm.length;

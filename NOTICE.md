@@ -18,6 +18,11 @@ MIT License.
 같은 파일에 VRM 모델 불러오기용 three-vrm(@pixiv/three-vrm, 사람형 뼈·표정·흔들림 뼈·노드 제약·MToon 값 읽기)을 함께 묶었습니다. Copyright (c) 2019-2026 pixiv Inc. — MIT License.
 `character/taa.ts`(실험 TAA)의 AABB 클리핑은 Playdead INSIDE TAA(Copyright (c) 2015 Playdead — MIT License), 히스토리 Catmull-Rom 5탭 샘플링은 MJP(Matt Pettineo)의 공개 코드(MIT License)를 참고해 다시 쓴 것입니다.
 
+## 한국어 혼잣말 (기능을 켤 때 내려받는 구성 요소)
+저장소에는 들어 있지 않고, 사용자가 기능을 켜면 사용자 폴더로 받습니다.
+- node-llama-cpp와 의존 패키지(`plugin/mutter-runtime.json` 목록) — Copyright (c) Gilad S. — MIT License. 함께 받는 llama.cpp 실행 파일은 Copyright (c) Georgi Gerganov — MIT License.
+- Kanana 1.5 2.1B Instruct (kakaocorp/kanana-1.5-2.1b-instruct-2505)의 Q4_K_M GGUF 변환본 — Copyright (c) Kakao Corp. — Apache License 2.0.
+
 ## Live2D 모델 (DeepSeek짱)
 `assets/model/` — 오픈소스로 공개된 모델입니다.
 

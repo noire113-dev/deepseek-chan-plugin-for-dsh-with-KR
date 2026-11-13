@@ -112,6 +112,8 @@ DSH Desktop 앱과 브라우저 Web UI에서 사용할 수 있습니다. 텍스�
 | 말⁠풍⁠선 음⁠성 | 말풍선 대사를 TTS로 읽기 (기본값 꺼짐) — [말풍선 음성](#말풍선-음성-tts-옵트인) 참고 |
 | 3⁠D 모⁠델 (실⁠험) | 모델 폴더, 외곽선 법선, 눈썹 움직임 세기·부드러움, 앰비언트 오클루전과 세기. 폴더를 비우면 기본 Live2D 캐릭터 (기본값 비어 있음) — [3D 모델](#3d-모델-beta) 참고 |
 | 대⁠사 ex | 켜면 `assets/dsc-lines-ex.json`에 적은 상황의 대사로 기본 대사를 바꿈 (기본값 꺼짐) — [대사 ex](#대사-ex-실험적) 참고 |
+| 한⁠국⁠어 혼⁠잣⁠말 (⁠로⁠컬 L⁠L⁠M⁠) | 작업 중 영어 추론 혼잣말을 이 PC의 CPU에서 도는 작은 모델로 한국어로 바꿈 (기본값 꺼짐) — [한국어 혼잣말](#한국어-혼잣말-로컬-llm) 참고 |
+| 인⁠증 쿠⁠키 3⁠일⁠만 유⁠지 | DSH가 켤 때마다 만드는 인증 쿠키를 3일만 유지해 쌓여서 생기는 시작 오류를 막음 (기본값 켜짐) — [인증 쿠키 3일만 유지](#인증-쿠키-3일만-유지) 참고 |
 
 캐릭터·테마·한국어는 기본으로 켜져 있습니다. 설정을 바꾸면 즉시 적용되고 현재 프로필에 저장됩니다. 한국어 표시 언어는 **설정 → 일반 설정 → 언어**(Settings → General → Language)에서 선택합니다.
 
@@ -190,6 +192,28 @@ VRM에서도 위 항목을 적으면 기본값을 덮어씁니다(예: `gaze`, `
 - 파일 형식과 텍스트 대사 묶음을 변환하는 방법은 [`docs/ex-lines-guide.md`](docs/ex-lines-guide.md)에 있습니다(`tools/convert-part-lines.mjs`).
 - 플러그인을 업데이트하면 `assets/` 폴더가 교체되어 **직접 고친 ex 파일이 덮어써질 수 있습니다.** 따로 보관해 두세요.
 
+## 한국어 혼잣말 (로컬 LLM)
+
+설정의 **한국어 혼잣말 (로컬 LLM)** 스위치(기본값 꺼짐)를 켜면, 작업 중 캐릭터가 중얼거리는 영어 추론 요약을 이 PC의 CPU에서 도는 작은 모델로 캐릭터 말투(해요체)의 짧은 한국어로 바꿉니다.
+
+- **따로 설치할 것이 없습니다.** 처음 켜면 플러그인이 사용자 폴더(Windows `%LOCALAPPDATA%\deepseek-harness-kr\mutter`, macOS `~/Library/Application Support/deepseek-harness-kr/mutter`)에 엔진과 모델을 받습니다.
+  - 엔진: [node-llama-cpp](https://github.com/withcatai/node-llama-cpp) 3.22.3과 의존 패키지, 이 운영체제용 CPU 실행 파일 (약 90MB). 버전과 무결성 값(sha512)을 `plugin/mutter-runtime.json`에 고정해 두고 npm 저장소에서 받아 확인한 뒤 풉니다.
+  - 모델: Kanana 1.5 2.1B Instruct Q4_K_M (GGUF, 약 1.5GB, Apache-2.0). 커밋을 고정한 주소에서 받아 sha256을 확인합니다. **모델 파일 (선택)** 칸에 다른 GGUF 파일을 적으면 그 파일을 씁니다.
+  - 받는 진행률과 준비 상태는 스위치 아래에 표시됩니다. 실패하면 껐다 켜서 다시 시도합니다.
+- **DSH를 느리게 하지 않습니다.** DSH가 시작되는 동안에는 아무것도 하지 않고, 시작 화면이 뜬 뒤 엔진을 DSH 밖의 별도 프로세스(CPU 우선순위 낮음, 스레드 최대 6개)로 띄워 모델을 불러 둡니다. 켜 두는 동안 메모리를 약 2GB 쓰고, 끄면 바로 돌려줍니다.
+- 한 줄 바꾸는 데 1초 안팎이 걸립니다(Core Ultra 7 270K 기준 0.6~0.9초). 준비 중이거나 4초 안에 답이 없으면 영어로 중얼거리고, 처음부터 한국어인 추론 줄은 모델을 거치지 않습니다.
+- 작은 모델이라 가끔 반말이 섞이거나 호칭이 붙는 등 말투가 어색할 수 있습니다.
+
+## 인증 쿠키 3일만 유지
+
+DSH는 켤 때마다 포트가 바뀌고, 그때마다 `127.0.0.1`용 인증 쿠키(`dsh-auth-…`)를 새 이름으로 하나씩 만들어 30일 동안 남깁니다. 쿠키는 포트를 구분하지 않아 모든 요청에 함께 실리므로, 70개쯤 쌓이면 요청 헤더 한도(16KB)를 넘어 DSH가 **"desktop welcome: Web authentication failed"** 오류로 시작하지 못합니다.
+
+설정의 **인증 쿠키 3일만 유지** 스위치(기본값 켜짐)를 켜 두면, 새로 만드는 인증 쿠키의 수명을 3일로 줄여 쌓이지 않게 합니다.
+
+- 쿠키를 검사하는 기준은 원래대로(30일) 두므로, 이미 쓰고 있는 쿠키는 그대로 유효합니다.
+- 브라우저로 DSH 웹 화면을 쓰는 경우에는 3일마다 다시 인증하게 됩니다. 데스크톱 앱은 켤 때마다 새로 인증하므로 달라지는 점이 없습니다.
+- 이미 오류가 나서 DSH가 뜨지 않는다면, DSH를 완전히 종료한 뒤 `%APPDATA%\@deepseek-ai\dsh-desktop\Network\Cookies`를 백업하고 `127.0.0.1`의 `dsh-auth-` 쿠키를 지우면 됩니다.
+
 ## 호환성
 
 - 지원하는 DSH 버전은 0.2.1-rc.5 이상 0.3 미만입니다. 0.8.0 구조 개편은 Windows DSH 0.2.2와 macOS DSH 0.2.2-rc.1의 격리 프로필에서 실제 동작을 확인했습니다([#26](https://github.com/noire113-dev/deepseek-chan-plugin-for-dsh-with-KR/pull/26)).
@@ -208,7 +232,7 @@ VRM에서도 위 항목을 적으면 기본값을 덮어씁니다(예: `gaze`, `
 | `character/` | 인앱 캐릭터 TypeScript 소스(고유 행동은 `character/behaviors/`). 빌드하면 `assets/dsc.js`와 `lib/client.js`가 만들어집니다 |
 | `assets/` | 빌드된 캐릭터 코드(`dsc.js`)·3D 렌더러 번들(`vendor/rig-three.js`), 대사(`dsc-lines.json`·`dsc-lines-ex.json`)와 Live2D 모델·테마·배경 |
 | `docs/` | 대사 추가 가이드(`dialogue-guide.md`)·대사 ex 변환 가이드(`ex-lines-guide.md`)·소개 이미지 |
-| `tools/` | 대사 파일 검사기(`check-lines.mjs`)·대사 ex 변환기(`convert-part-lines.mjs`) |
+| `tools/` | 대사 파일 검사기(`check-lines.mjs`)·대사 ex 변환기(`convert-part-lines.mjs`)·한국어 혼잣말 엔진 목록 생성기(`mutter-runtime-manifest.mjs`)와 샘플 화면(`mutter-ko-demo/`) |
 | `lib/` | 빌드된 플러그인 클라이언트(`client.js`) |
 | `pet/` | 바깥 펫 창(Electron) 코드 |
 | `shared/` | 캐릭터·설정 화면·펫 메뉴가 함께 쓰는 소품·체형 정의 |
@@ -272,7 +296,7 @@ node tools/check-lines.mjs
 - [Claude](https://claude.ai) (Anthropic, Claude Code) — 한국어화·인앱 캐릭터 코드, 패치·빌드 도구, 소개 영상 제작, PR 검증·릴리즈
 - [Codex](https://openai.com/codex) (OpenAI) — 이슈·PR 작업 계획, 코드 검수, 문서 정리
 - [DeepSeek](https://www.deepseek.com) (DeepSeek V4.1 Flash 1017) — 버그 수정, PR 통합·기능 구현, 자동 테스트
-- [Opus](https://claude.ai) (Anthropic, Claude Opus) — 기능 통합·릴리즈 작업
+- [Opus](https://claude.ai) (Anthropic, Claude Opus) — 기능 통합·릴리즈 작업. 0.10.0의 한국어 혼잣말(로컬 LLM, 자동 설치·별도 프로세스)과 인증 쿠키 3일만 유지 기능은 Claude Opus 5.5가 작성
 - Gemma 4 26B A4B heretic — 대사 ex 작성
 - Live2D 모델 원작: Kamiya_Ryoko (VGen @KAMIYA) — `NOTICE.md` 참고
 
